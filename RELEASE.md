@@ -1,5 +1,10 @@
 # Rilasciare DevTrack
 
+Lo sviluppo e le release partono da questo repository, `brainupstudio/devtrack` (pubblico). Ogni
+commit qui è visibile a tutti: niente dati personali, percorsi, token, note di lavoro interne o
+riferimenti ad altre app. Le release si pubblicano poi anche su `brainupstudio/devtrack.site`
+(passo 5), da cui le app installate si aggiornano.
+
 ## I pacchetti
 
 | Sistema | Pacchetto | Come si costruisce |
@@ -21,7 +26,7 @@ Su Windows `build.rs` incorpora nel `.exe` l'icona (`assets/icons/app-icon.ico`,
    ```
    Il workflow costruisce i tre pacchetti e li allega a una **bozza** di rilascio "DevTrack v<versione>".
    Insieme ai pacchetti pubblica `SHA256SUMS.txt`, le loro impronte.
-4. Controlla la bozza su GitHub › Releases, scarica e prova almeno un pacchetto per sistema, poi pubblicala.
+4. Controlla la bozza su GitHub › Releases, scarica e prova almeno un pacchetto per sistema, poi pubblicala. Verifica anche che i programmi non contengano dati personali: `strings <programma> | grep -c "/Users/"` deve trovare solo `/Users/runner/`.
 5. Copia i pacchetti e `SHA256SUMS.txt` in una release `v<versione>` del sito (senza il DMG e le impronte lì, l'aggiornamento automatico su macOS non parte), `brainupstudio/devtrack.site`, segnata come ultima, e aggiorna la versione in `js/config.js` del sito. È da lì che si scarica: la pagina di download, il controllo aggiornamenti dell'app e gli script `install.sh` / `install.ps1` leggono l'ultima release del sito, e gli script si fermano se mancano le impronte.
    ```sh
    gh release download v<versione> -D /tmp/devtrack-<versione>

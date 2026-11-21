@@ -8,7 +8,7 @@ web (this record covers the public download page; the product itself is a deskto
 
 ## Stack
 
-Download page: static site on GitHub Pages, three.js for the 3D scene. Download links point to the latest GitHub Release of `brainupstudio/devtrack.application`.
+Code: `brainupstudio/devtrack` (this repository, MIT). Download page: static site on GitHub Pages in `brainupstudio/devtrack.site`, three.js for the 3D scene; its download links, the install scripts and the app's update check all read the latest release of `brainupstudio/devtrack.site`.
 
 ## Users
 
