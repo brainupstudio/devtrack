@@ -1,16 +1,14 @@
-## DevTrack 0.1.5
+## DevTrack 0.1.6
 
-### Novità
-- **Codice aperto:** il codice di DevTrack è pubblico, con licenza MIT, su [github.com/brainupstudio/devtrack](https://github.com/brainupstudio/devtrack), con una guida all'uso.
-- **Importazione da un altro strumento di tracciamento:** accanto al token API ora si indica anche l'indirizzo del servizio da cui leggere le voci. Nessuno dei due viene salvato.
-- **Formati della durata** con nomi più chiari: "Ore, minuti e secondi", "Minuti e secondi", "Ore decimali".
+### Correzioni
+- **Sfumature delle liste:** in cima e in fondo alle liste non resta più visibile una sottile striscia di righe oltre la sfumatura.
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.5-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.5-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.5-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.6-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.6-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.6-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -29,6 +27,13 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.5
+
+### Novità
+- **Codice aperto:** il codice di DevTrack è pubblico, con licenza MIT, su [github.com/brainupstudio/devtrack](https://github.com/brainupstudio/devtrack), con una guida all'uso.
+- **Importazione da un altro strumento di tracciamento:** accanto al token API ora si indica anche l'indirizzo del servizio da cui leggere le voci. Nessuno dei due viene salvato.
+- **Formati della durata** con nomi più chiari: "Ore, minuti e secondi", "Minuti e secondi", "Ore decimali".
 
 ## DevTrack 0.1.4
 
