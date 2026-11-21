@@ -2318,13 +2318,20 @@ pub fn scroll_fades<R>(ui: &Ui, out: &egui::scroll_area::ScrollAreaOutput<R>, bg
     if h < 4.0 {
         return;
     }
-    let painter = ui.painter().with_clip_rect(rect);
+    // egui clips a vertical scroll area's content `clip_rect_margin` beyond its inner rect at the
+    // top and bottom, so the bands must reach that far too: otherwise a thin strip of rows stays
+    // visible past the fade, like a slit the list scrolls behind
+    let m = ui.visuals().clip_rect_margin;
+    let painter = ui.painter().with_clip_rect(Rect::from_min_max(
+        egui::pos2(rect.left(), rect.top() - m),
+        egui::pos2(rect.right(), rect.bottom() + m),
+    ));
     let band = |top: f32, from_top: bool, strength: f32| {
         let mut mesh = egui::Mesh::default();
         let solid = bg.gamma_multiply(strength);
         let clear = Color32::TRANSPARENT;
         let (c_top, c_bottom) = if from_top { (solid, clear) } else { (clear, solid) };
-        let r = Rect::from_min_size(egui::pos2(rect.left(), top), egui::vec2(rect.width(), h));
+        let r = Rect::from_min_size(egui::pos2(rect.left(), top), egui::vec2(rect.width(), h + m));
         mesh.colored_vertex(r.left_top(), c_top);
         mesh.colored_vertex(r.right_top(), c_top);
         mesh.colored_vertex(r.left_bottom(), c_bottom);
@@ -2335,7 +2342,7 @@ pub fn scroll_fades<R>(ui: &Ui, out: &egui::scroll_area::ScrollAreaOutput<R>, bg
     };
     // the band grows in with the first pixels scrolled, so it never pops in
     if offset > 0.5 {
-        band(rect.top(), true, (offset / h).min(1.0));
+        band(rect.top() - m, true, (offset / h).min(1.0));
     }
     if hidden_below > 0.5 {
         band(rect.bottom() - h, false, (hidden_below / h).min(1.0));
