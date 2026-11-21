@@ -1,0 +1,114 @@
+# Builds DevTrack for macOS (one app for Apple silicon and Intel), Windows (x64) and Linux (x64).
+#
+# - Run by hand (Actions › Release › Run workflow): builds the three packages and keeps them as
+#   artifacts of the run, to try before a release.
+# - Push a tag "v<version>" (e.g. v0.1.0): builds them and attaches them to a draft GitHub
+#   release with that name, which is published by hand after a check.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (Apple silicon + Intel)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Build DevTrack.app and the disk image
+        run: scripts/bundle-macos.sh --universal --dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      # build.rs embeds the icon with the name and version: if the name is missing, so is the icon
+      - name: Check the icon and version are inside DevTrack.exe
+        shell: pwsh
+        run: |
+          $v = (Get-Item target/release/devtrack.exe).VersionInfo
+          if ($v.FileDescription -ne "DevTrack") { throw "Windows resources (icon, name, version) are not in devtrack.exe" }
+          "DevTrack.exe $($v.FileVersion): icon and version embedded"
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $stage = "DevTrack-$version-Windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/devtrack.exe "$stage/DevTrack.exe"
+          Copy-Item packaging/README-windows.txt "$stage/README.txt"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$stage.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System libraries for the window, the keyboard and the file dialogs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libgtk-3-dev
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          stage="DevTrack-$version-Linux-x64"
+          mkdir -p "$stage" dist
+          install -m 755 target/release/devtrack "$stage/devtrack"
+          cp packaging/linux/devtrack.desktop packaging/linux/install.sh "$stage/"
+          cp assets/icons/app-icon.png "$stage/devtrack.png"
+          tar -czf "dist/$stage.tar.gz" "$stage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # the install scripts on the site check every download against these
+      - name: Checksums
+        run: cd dist && sha256sum DevTrack-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: DevTrack ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: dist/*

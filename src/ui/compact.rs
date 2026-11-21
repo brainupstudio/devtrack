@@ -1,0 +1,331 @@
+//! Compact window: the same data and the same timer in a small window (430 × 720 at first,
+//! 380 × 480 at least). Header with Expand, the current session with its controls, today's
+//! total, a needs-details banner and the history grouped by day (today and the previous six
+//! days, "Load earlier" for more). Settings opens the full window on Settings.
+//! Dialog policy: Edit and Add time open here as normal dialogs; switching window mode is
+//! refused while a dialog is open, so unsaved changes are never lost by a resize.
+
+use super::today::{incomplete_in, missing_text, open_edit, Past};
+use super::i18n::trf_m;
+use super::i18n::tr;
+use super::i18n::plural;
+use super::widgets::*;
+use super::{App, Page};
+use chrono::{Duration as CDur, NaiveDate};
+use devtrack_core::model::*;
+use devtrack_core::report::{day_pieces, needs_completion, today, Period, PeriodKind};
+use devtrack_core::store::now_secs;
+use devtrack_core::timefmt::clock;
+use eframe::egui::{self, RichText, Sense, Stroke};
+use std::collections::BTreeMap;
+
+pub struct CompactState {
+    pub days_loaded: i64,
+}
+
+impl Default for CompactState {
+    fn default() -> Self {
+        CompactState { days_loaded: 7 }
+    }
+}
+
+pub fn show(app: &mut App, ctx: &egui::Context) {
+    let c = pal(app.dark());
+    let h24 = app.store.db.settings.clock_24h;
+    // ---- header ----
+    egui::TopBottomPanel::top("compact-head").frame(egui::Frame::new().fill(c.nav).inner_margin(egui::Margin::symmetric(16, 10)).stroke(Stroke::new(1.0, c.line))).show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            // macOS paints the window buttons over the start of this bar
+            let bar = ui.max_rect();
+            super::window_drag(ui, bar.expand2(egui::vec2(16.0, 10.0)), "compact");
+            let expand = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let k = if cfg!(target_os = "macos") { "⌘⇧M" } else { "Ctrl+Shift+M" };
+                let r = icon_button(ui, Glyph::Expand, &trf_m!("Expand window ({})", k));
+                if r.clicked() {
+                    app.exit_compact(ctx, None);
+                }
+                r.rect
+            }).inner;
+            // the logo in the middle of the bar, clear of the window buttons on the left and of
+            // Expand on the right
+            let w = brand_lockup_width(ui, 21.0, 14.0);
+            let at = egui::Rect::from_min_size(egui::pos2(bar.center().x - w / 2.0, expand.center().y - 10.5), egui::vec2(w, 21.0));
+            let mut logo = ui.new_child(egui::UiBuilder::new().max_rect(at).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            brand_lockup(&mut logo, 21.0, Some(14.0));
+        });
+    });
+    // ---- footer ----
+    egui::TopBottomPanel::bottom("compact-foot").frame(egui::Frame::new().fill(c.nav).inner_margin(egui::Margin::symmetric(16, 10)).stroke(Stroke::new(1.0, c.line))).show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            if secondary(ui, "Settings").on_hover_text(tr("Opens Settings in the full window")).clicked() {
+                app.exit_compact(ctx, Some(Page::Settings));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(problem) = app.settings_problem() {
+                    ui.label(RichText::new(tr("Settings need attention")).size(12.0).color(c.amber)).on_hover_text(problem);
+                }
+            });
+        });
+    });
+    // ---- session, totals, banner: fixed when there is room, scrolling with the history when short ----
+    let tall = ctx.screen_rect().height() >= 620.0;
+    if tall {
+        egui::TopBottomPanel::top("compact-session").frame(egui::Frame::new().fill(c.canvas).inner_margin(egui::Margin { left: 16, right: 16, top: 16, bottom: 8 })).show_separator_line(false).show(ctx, |ui| top(app, ui));
+    }
+    // ---- history ----
+    egui::CentralPanel::default().frame(egui::Frame::new().fill(c.canvas).inner_margin(egui::Margin { left: 16, right: 4, top: 0, bottom: 8 })).show(ctx, |ui| {
+        egui::ScrollArea::vertical().id_salt("compact-history").auto_shrink([false, false]).show(ui, |ui| {
+            // the scroll bar, which egui draws over the content, gets the 12 px gutter: the rows
+            // end on the same 16 px margin as the controls above
+            ui.set_max_width(ui.available_width() - 12.0);
+            if !tall {
+                ui.add_space(16.0);
+                top(app, ui);
+            }
+            history(app, ui, h24);
+        });
+    });
+}
+
+fn top(app: &mut App, ui: &mut egui::Ui) {
+    let c = p(ui);
+        session(app, ui);
+        ui.add_space(12.0);
+        // today's total is shown once, in the "Today" header of the history below
+        let week = Period { kind: PeriodKind::Week, start: today() - CDur::days(app.compact_ui.days_loaded - 1), end: today() + CDur::days(1) };
+        let inc = incomplete_in(app, &week);
+        if !inc.is_empty() {
+            ui.add_space(8.0);
+            // the same status box as Today and Report Time, on the right: one click opens the
+            // first session to complete
+            let text = format!("! {}", plural(inc.len() as i64, "{} session needs details", "{} sessions need details"));
+            let mut review = false;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                review = status_chip(ui, &text, c.amber, Some("Complete the first one")).clicked();
+            });
+            if review {
+                let e = inc[0].clone();
+                open_edit(app, &e, Some(ui.ctx()), true);
+            }
+        }
+        ui.add_space(12.0);
+        row(ui, CTRL_H, |ui| {
+            ui.label(RichText::new(tr("Recent sessions")).font(medium(16.0)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if secondary(ui, "+ Add past time").on_hover_text(tr("Add a session that already happened")).clicked() {
+                    app.remember_focus(ui.ctx());
+                    app.today.past = Past::default();
+                    app.today.past_open = true;
+                }
+            });
+        });
+    }
+
+fn session(app: &mut App, ui: &mut egui::Ui) {
+    let c = p(ui);
+    let now = now_secs();
+    let w = ui.available_width();
+    let half = (w - ROW_GAP) / 2.0;
+    if let Some(e) = app.store.db.running().cloned() {
+        ui.horizontal(|ui| {
+            dot(ui, c.green, 3.5);
+            ui.label(RichText::new(tr("Tracking now")).size(12.0).color(c.green));
+        });
+        let what = super::session_title(&app.store.db, &e);
+        ui.add(egui::Label::new(RichText::new(&what).font(medium(16.0))).truncate()).on_hover_text(&what);
+        ui.horizontal(|ui| {
+            if let Some(pr) = app.store.db.project(&e.project_id) {
+                dot(ui, hex(&pr.color), 3.5);
+                ui.add(egui::Label::new(RichText::new(&pr.name).size(12.0).color(c.text2)).truncate());
+            } else {
+                ui.label(RichText::new(tr("No project")).size(12.0).color(c.amber));
+            }
+            if let Some(t) = app.store.db.task(&e.task_id) {
+                if let Some(id) = &t.external_id {
+                    ui.label(mono(format!("#{}", id), 12.0).color(c.text2));
+                }
+                ui.add(egui::Label::new(RichText::new(&t.title).size(12.0).color(c.text2)).truncate());
+            }
+        });
+        let t = super::today::running_timer(ui, &e, now, 34.0);
+        if t.clicked() || std::mem::take(&mut app.today.run_time_request) {
+            super::today::open_run_time(app, ui, &e, t.rect);
+        }
+        super::today::run_time_popover(app, ui, &e, &t);
+        ui.horizontal(|ui| {
+            if button_w(ui, Kind::Secondary, "Pause", half, true).on_hover_text(tr("⌘/Ctrl+P")).clicked() {
+                app.store.pause();
+            }
+            if button_w(ui, Kind::Primary, "Stop", half, true).on_hover_text(tr("⌘/Ctrl+Enter")).clicked() {
+                app.store.stop();
+                app.notify(tr("Session saved"));
+            }
+        });
+    } else if let Some(pe) = app.store.paused().cloned() {
+        ui.horizontal(|ui| {
+            dot(ui, c.amber, 3.5);
+            ui.label(RichText::new(tr("Paused")).size(12.0).color(c.amber));
+        });
+        let what = super::session_title(&app.store.db, &pe);
+        ui.add(egui::Label::new(RichText::new(&what).font(medium(16.0))).truncate());
+        ui.label(mono_m(clock(pe.duration(now)), 34.0).color(c.text2));
+        ui.horizontal(|ui| {
+            if button_w(ui, Kind::Primary, "Resume", w, true).on_hover_text(tr("Continue it as a new piece (⌘/Ctrl+P)")).clicked() {
+                app.store.resume();
+            }
+        });
+    } else {
+        let rp = recent_projects(&app.store.db);
+        let mut enter = false;
+        field(ui, "Description", None, None, |ui| {
+            let mut text = app.today.draft.desc.clone();
+            let r = input(ui, &mut text, Field::new("Description", w).hint("What are you working on?"));
+            app.today.draft.desc = text.clone();
+            // same suggestions as Today: earlier sessions and projects while typing
+            enter = super::today::suggest_under(app, ui, &r, last_input_rect(ui), &text, None, w);
+        });
+        ui.add_space(ROW_GAP - LABEL_GAP);
+        ui.horizontal_top(|ui| {
+            let mut proj = app.today.draft.project.clone();
+            field(ui, "Project", None, None, |ui| {
+                if let Pick::Create(n) = project_picker(ui, "compact-project", &app.store.db, &rp, &mut proj, w - BTN_MIN_W - ROW_GAP) {
+                    proj = Some(app.create_project(&n));
+                }
+            });
+            if proj != app.today.draft.project {
+                app.today.draft.billable = app.store.db.project(&proj).map(|p| p.billable_default).unwrap_or(false);
+                app.today.draft.task = None;
+            }
+            app.today.draft.project = proj;
+            field(ui, " ", None, None, |ui| {
+                if button_w(ui, Kind::Primary, "Start", BTN_MIN_W, true).on_hover_text(tr("⌘/Ctrl+Enter")).clicked() || enter {
+                    app.start_draft();
+                }
+            });
+        });
+    }
+}
+
+fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
+    let c = p(ui);
+    let now = now_secs();
+    let first = today() - CDur::days(app.compact_ui.days_loaded - 1);
+    let mut by_day: BTreeMap<NaiveDate, Vec<(TimeEntry, i64, i64)>> = BTreeMap::new();
+    for e in app.store.db.live_entries().filter(|e| !e.is_running()) {
+        for (d, a, b) in day_pieces(e, now) {
+            if d >= first && d <= today() {
+                by_day.entry(d).or_default().push((e.clone(), a, b));
+            }
+        }
+    }
+    // day totals include the running session, so "Today" here matches the Today page
+    let mut running_by_day: BTreeMap<NaiveDate, i64> = BTreeMap::new();
+    if let Some(e) = app.store.db.running() {
+        for (d, a, b) in day_pieces(e, now) {
+            *running_by_day.entry(d).or_default() += b - a;
+        }
+    }
+    let mut action: Option<(u8, TimeEntry)> = None;
+    if by_day.is_empty() {
+        ui.add_space(12.0);
+        meta(ui, trf_m!("No sessions in the last {} days.", app.compact_ui.days_loaded));
+    }
+    let w = ui.available_width();
+    for (date, mut list) in by_day.into_iter().rev() {
+        list.sort_by_key(|x| std::cmp::Reverse(x.1));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let name = if date == today() { tr("Today") } else if date == today() - CDur::days(1) { tr("Yesterday") } else { super::i18n::weekday_title(date) };
+            ui.label(RichText::new(name).font(medium(13.0)));
+            ui.label(mono(super::i18n::short_date(date), 12.0).color(c.text2));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                mixed(ui, &words(list.iter().map(|x| x.2 - x.1).sum::<i64>() + running_by_day.get(&date).copied().unwrap_or(0)), 12.0, Some(c.text2));
+            });
+        });
+        divider(ui);
+        for (e, a, b) in &list {
+            let mut actions_left = f32::INFINITY;
+            // line 1: title · duration · ▶ · "···"; line 2 (full row width): time and project
+            let row = ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                col(ui, (w - 76.0 - CTRL_H * 2.0 - 4.0 - ROW_GAP * 2.0).max(120.0), CTRL_H, |ui| {
+                    ui.add_space(8.0);
+                    let title = super::session_title(&app.store.db, e);
+                    ui.add(egui::Label::new(RichText::new(title).font(medium(14.0))).truncate());
+                });
+                col_right(ui, 76.0, CTRL_H, |ui| {
+                    ui.add_space(8.0);
+                    ui.label(mono(super::shown_duration(&app.store.db, b - a), 14.0));
+                });
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let resume = icon_ghost(ui, Glyph::Play, "Continue now");
+                actions_left = resume.rect.left();
+                if resume.clicked() {
+                    action = Some((0, e.clone()));
+                }
+                let more = icon_button(ui, Glyph::More, "Session actions");
+                let pid = ui.make_persistent_id(("compact-more", &e.id, *a));
+                if more.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(pid));
+                }
+                egui::popup_below_widget(ui, pid, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                    ui.set_min_width(180.0);
+                    if menu_row(ui, "Continue now", false, false).clicked() {
+                        action = Some((0, e.clone()));
+                    }
+                    if menu_row(ui, "Edit…", false, false).clicked() {
+                        action = Some((1, e.clone()));
+                    }
+                    if menu_row(ui, "Delete", false, false).clicked() {
+                        action = Some((2, e.clone()));
+                    }
+                });
+                });
+                ui.horizontal(|ui| {
+                    ui.set_max_width(w);
+                    ui.label(range_job(&clock_text(*a, h24), &clock_text(*b, h24), 12.0, c.text2));
+                    let miss = missing_text(e);
+                    if !miss.is_empty() {
+                        // secondary text shrinks with the row, never pushes it wider
+                        ui.add(egui::Label::new(RichText::new(tr(miss)).size(12.0).color(c.amber)).truncate());
+                    } else if let Some(pr) = app.store.db.project(&e.project_id) {
+                        dot(ui, hex(&pr.color), 3.0);
+                        ui.add(egui::Label::new(RichText::new(&pr.name).size(12.0).color(c.text2)).truncate());
+                    }
+                });
+                ui.add_space(10.0);
+            });
+            // the row opens the editor; its action buttons keep their own clicks
+            let r = row.response.rect;
+            let click = egui::Rect::from_min_max(r.min, egui::pos2(actions_left.min(r.right()) - ROW_GAP, r.bottom()));
+            if ui.interact(click, egui::Id::new(("compact-row", &e.id, *a)), Sense::click()).clicked() {
+                action = Some((1, e.clone()));
+            }
+            divider(ui);
+        }
+    }
+    ui.add_space(12.0);
+    if link_btn(ui, "Load earlier").on_hover_text(tr("Show seven more days")).clicked() {
+        app.compact_ui.days_loaded += 7;
+    }
+    if let Some((k, e)) = action {
+        match k {
+            0 => app.store.continue_entry(&e.id),
+            1 => {
+                let review = needs_completion(&e);
+                open_edit(app, &e, Some(ui.ctx()), review);
+            }
+            _ => {
+                if devtrack_core::report::locked(&app.store.db, e.start) {
+                    let m = super::today::locked_text(app);
+                    app.notify(m);
+                } else {
+                    app.store.delete_entry(&e.id);
+                    app.notify_undo(tr("Session deleted"));
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DevTrack
+Comment=Personal time tracking and timesheet preparation
+Exec=devtrack
+Icon=devtrack
+Terminal=false
+Categories=Office;ProjectManagement;Utility;
+StartupWMClass=devtrack

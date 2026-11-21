@@ -1,0 +1,21 @@
+# Rust build output and generated review captures
+/target/
+/shots/
+/work/
+/outputs/
+
+# OS metadata and local secrets/data
+.DS_Store
+._*
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+/data.json
+/data.previous.json
+/local.json
+
+# release packages
+/dist/
