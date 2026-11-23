@@ -794,8 +794,21 @@ impl App {
                 widgets::SHOT_OPEN_PROJECT.store(true, std::sync::atomic::Ordering::Relaxed);
                 Page::Today
             }
-            "past" => {
+            // the dialog over another page, as the top bar opens it from anywhere
+            "past-work" => {
                 self.today.past_open = true;
+                Page::Activities
+            }
+            "past" | "past-task-menu" => {
+                self.today.past_open = true;
+                self.today.preview_task_menu = name == "past-task-menu";
+                // a long list, as in real use: recent tasks on top, the menu fills its room
+                if name == "past-task-menu" && !self.store.is_persistent() {
+                    let pid = self.store.db.live_projects().first().map(|p| p.id.clone());
+                    for i in 1..=14 {
+                        self.create_task(&format!("Sample task {i}"), pid.clone());
+                    }
+                }
                 Page::Today
             }
             "dest-new" => {
@@ -1991,9 +2004,10 @@ impl eframe::App for App {
         self.narrow = self.mode == WinMode::Full && ctx.screen_rect().width() < 760.0;
         self.rail = self.narrow || (self.mode == WinMode::Full && self.store.local.sidebar_collapsed);
         self.maybe_sync();
-        // the assigned work items: read again when Today (or the compact window) shows them
+        // the assigned work items: read again when the task field (Today, the compact window) or
+        // a session dialog shows them
         assigned::poll(self);
-        if self.mode == WinMode::Compact || self.page == Page::Today {
+        if self.mode == WinMode::Compact || self.page == Page::Today || self.today.edit.is_some() || self.today.past_open {
             assigned::refresh(self, false);
         }
         if let Some(out) = self.jobs.poll() {

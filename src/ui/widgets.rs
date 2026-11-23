@@ -1377,8 +1377,10 @@ pub enum Pick {
     Changed,
     /// Create a new local project / task with this name.
     Create(String),
-    /// Go to the work-item finder.
-    Import,
+    /// An Azure DevOps work item not yet in DevTrack (its number): import it and pick it.
+    Remote(String),
+    /// Look this #number up in Azure DevOps (the list stays open for the answer).
+    LookUp(String),
 }
 
 fn search_box(ui: &mut Ui, id: egui::Id, hint: &str) -> String {
@@ -1721,7 +1723,7 @@ fn filtered_projects<'a>(db: &'a Db, query: &str) -> Vec<&'a Project> {
 
 /// Task picker: search by title, number or source project; recent; create; import.
 /// Picking a task sets its project too.
-pub fn task_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent: &[Id], project: &mut Option<Id>, task: &mut Option<Id>, width: f32) -> Pick {
+pub fn task_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, remote: Option<&super::today::RemoteSuggest>, recent: &[Id], project: &mut Option<Id>, task: &mut Option<Id>, width: f32) -> Pick {
     let mut out = Pick::None;
     let (txt, ph) = match db.task(task) {
         Some(t) => (t.display(), false),
@@ -1730,7 +1732,9 @@ pub fn task_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent: &[I
     let pid = ui.make_persistent_id((&salt, "task-popup"));
     let sid = ui.make_persistent_id((&salt, "task-q"));
     let resp = select_trigger(ui, &txt, ph, width, true, false, false);
-    if resp.clicked() {
+    // review pictures open the menu without a click
+    let preview_open = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::new("preview-open-task-picker"))).unwrap_or(false);
+    if resp.clicked() || preview_open {
         ui.memory_mut(|m| m.toggle_popup(pid));
         ui.data_mut(|d| d.insert_temp(sid.with("initial-focus"), true));
     }
@@ -1776,19 +1780,55 @@ pub fn task_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent: &[I
             }
             ui.separator();
         }
-        if q.is_empty() && pick_row(ui, current.is_none(), None, "No task", "", false) {
+        if q.is_empty() && pick_row(ui, current.is_none(), None, &tr("No task"), "", false) {
             choice = Some((None, None));
         }
         let list: Vec<&&Task> = all.iter().filter(|t| (in_project.is_none() || t.project_id == in_project || !q.is_empty()) && matches(&hay(t), &q)).collect();
-        let list_h = menu_list_h(ui, room);
+        // Azure DevOps work items not in DevTrack yet, in the same list: chosen, one is imported
+        // and picked without leaving the dialog the picker is in
+        let remote_items: Vec<&super::assigned::Item> = remote.map(|r| r.items.iter().filter(|i| search_matches(&q, &[&i.title, &i.id, &i.project])).take(8).collect()).unwrap_or_default();
+        // the list gets what is left once the parts under it are counted (the "no match" line,
+        // the Create button): a menu taller than its room would be pushed up over its field
+        let footer = if q.trim().is_empty() { 0.0 } else { CTRL_H + 16.0 } + if list.is_empty() && remote_items.is_empty() { 24.0 } else { 0.0 };
+        let list_h = menu_list_h(ui, room - footer);
+        let number = q.trim().trim_start_matches('#').to_string();
+        let ask_number = remote.is_some()
+            && !number.is_empty()
+            && number.chars().all(|ch| ch.is_ascii_digit())
+            && !list.iter().any(|t| t.external_id.as_deref() == Some(number.as_str()))
+            && !remote_items.iter().any(|i| i.id == number);
         egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).show(ui, |ui| {
             for t in &list {
                 if pick_row(ui, current.as_deref() == Some(t.id.as_str()), color(t), &t.title, &sub(t), true) {
                     choice = Some((Some(t.id.clone()), t.project_id.clone()));
                 }
             }
+            if !remote_items.is_empty() || ask_number {
+                ui.add_space(4.0);
+                meta(ui, "From Azure DevOps · not in DevTrack yet");
+            }
+            for it in &remote_items {
+                let sub = [it.project.clone(), it.status.clone()].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · ");
+                if pick_row(ui, false, None, &it.display(), &sub, false) {
+                    out = Pick::Remote(it.id.clone());
+                    close(ui, sid);
+                }
+            }
+            if ask_number {
+                use super::assigned::Lookup;
+                let state = remote.and_then(|r| r.lookup.as_ref()).filter(|(n, _)| *n == number).map(|(_, s)| s.clone());
+                let (title, sub) = match &state {
+                    Some(Lookup::Searching) => (trf_m!("Looking up #{}…", number), tr("Reading Azure DevOps")),
+                    Some(Lookup::NotFound) => (trf_m!("#{} isn't in Azure DevOps", number), tr("Or you can't see it with this connection")),
+                    Some(Lookup::Failed(m)) => (trf_m!("#{} couldn't be read", number), m.clone()),
+                    _ => (trf_m!("Look up #{} in Azure DevOps", number), tr("Not assigned to you, or not read yet")),
+                };
+                if pick_row(ui, false, None, &title, &sub, false) && !matches!(state, Some(Lookup::Searching) | Some(Lookup::NotFound)) {
+                    out = Pick::LookUp(number.clone());
+                }
+            }
         });
-        if list.is_empty() {
+        if list.is_empty() && remote_items.is_empty() {
             meta(ui, if q.trim().is_empty() { "No tasks in this project yet.".to_string() } else { trf_m!("No task matches “{}”.", q.trim()) });
         }
         if let Some((t, pr)) = choice {
@@ -1799,17 +1839,13 @@ pub fn task_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent: &[I
             out = Pick::Changed;
             close(ui, sid);
         }
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            if !q.trim().is_empty() && secondary(ui, &trf_m!("+ Create task “{}”", truncate(q.trim(), 24))).clicked() {
+        if !q.trim().is_empty() {
+            ui.separator();
+            if secondary(ui, &trf_m!("+ Create task “{}”", truncate(q.trim(), 24))).clicked() {
                 out = Pick::Create(q.trim().to_string());
                 close(ui, sid);
             }
-            if ghost(ui, "Find in Azure DevOps…").clicked() {
-                out = Pick::Import;
-                close(ui, sid);
-            }
-        });
+        }
     });
     if out != Pick::None || (was_open && ui.input(|i| i.key_pressed(egui::Key::Escape))) { resp.request_focus(); }
     out

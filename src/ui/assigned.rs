@@ -308,6 +308,28 @@ mod tests {
     }
 
     #[test]
+    fn a_work_item_chosen_in_a_session_dialog_becomes_its_task() {
+        use super::super::today::picked;
+        use super::super::widgets::Pick;
+        let mut app = app_with_azure();
+        // no project yet: it goes where its Azure DevOps project's items went
+        let (mut project, mut task) = (None, None);
+        assert!(picked(&mut app, Pick::Remote("7001".into()), &mut project, Some(&mut task)));
+        let t = app.store.db.task(&task).cloned().expect("imported");
+        assert_eq!(t.external_id.as_deref(), Some("7001"));
+        assert_eq!(project.as_deref(), Some("p-portal"));
+        // a project already chosen in the dialog wins
+        let (mut project, mut task) = (Some("p-migr".to_string()), None);
+        assert!(picked(&mut app, Pick::Remote("7002".into()), &mut project, Some(&mut task)));
+        assert_eq!(app.store.db.task(&task).and_then(|t| t.project_id.clone()).as_deref(), Some("p-migr"));
+        // a number to look up starts the lookup and changes nothing yet
+        let (mut project, mut task) = (None, None);
+        assert!(!picked(&mut app, Pick::LookUp("9999".into()), &mut project, Some(&mut task)));
+        assert!(task.is_none());
+        assert!(matches!(app.assigned.lookup, Some((ref n, _)) if n == "9999"));
+    }
+
+    #[test]
     fn starting_on_a_work_item_imports_it_into_its_likely_project() {
         let mut app = app_with_azure();
         if app.store.db.running().is_some() { app.store.stop(); }

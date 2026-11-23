@@ -195,7 +195,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
                 start_rects.push(("start row · project".into(), last_trigger_rect(ui)));
             });
             field(ui, "Task", None, None, |ui| {
-                task_picker(ui, "g-task", &app.store.db, &rt, &mut proj, &mut task, 200.0);
+                task_picker(ui, "g-task", &app.store.db, None, &rt, &mut proj, &mut task, 200.0);
                 start_rects.push(("start row · task".into(), last_trigger_rect(ui)));
             });
             field(ui, " ", None, None, |ui| {

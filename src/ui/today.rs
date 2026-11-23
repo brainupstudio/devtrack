@@ -69,6 +69,8 @@ pub struct TodayState {
     pub sheet_rows: Vec<Option<Id>>,
     /// The cell to put the cursor in once (a row just added: its first day to fill).
     pub sheet_focus: Option<(Option<Id>, NaiveDate)>,
+    /// Review pictures: open the task menu of the session dialog once.
+    pub preview_task_menu: bool,
     pub only_incomplete: bool,
     pub edit: Option<Edit>,
     pub run_desc: Option<(Id, String)>,
@@ -89,7 +91,7 @@ pub struct TodayState {
 
 impl TodayState {
     pub fn new(period: Period) -> Self {
-        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, only_incomplete: false, edit: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
+        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
     }
 }
 
@@ -172,7 +174,11 @@ fn client_of(db: &Db, project: &Option<Id>) -> Option<Id> {
 fn work_fields(app: &mut App, ui: &mut egui::Ui, salt: &str, w: f32, project: &mut Option<Id>, task: &mut Option<Id>, client: &mut Option<Id>, project_error: Option<&str>) {
     let rp = recent_projects(&app.store.db);
     let rt = recent_tasks(&app.store.db);
-    let b = field(ui, "Task", None, None, |ui| task_picker(ui, (salt, "task"), &app.store.db, &rt, project, task, w));
+    let remote = RemoteSuggest::of(app);
+    if std::mem::take(&mut app.today.preview_task_menu) {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("preview-open-task-picker"), true));
+    }
+    let b = field(ui, "Task", None, None, |ui| task_picker(ui, (salt, "task"), &app.store.db, remote.as_ref(), &rt, project, task, w));
     ui.add_space(ROW_GAP);
     let half = if w < 460.0 { w } else { (w - ROW_GAP) / 2.0 };
     let mut chosen = client.clone();
@@ -238,7 +244,7 @@ fn settle_work(app: &mut App, task_pick: Pick, project_pick: Pick, client_pick: 
     changed
 }
 
-fn picked(app: &mut App, pick: Pick, project: &mut Option<Id>, task: Option<&mut Option<Id>>) -> bool {
+pub(super) fn picked(app: &mut App, pick: Pick, project: &mut Option<Id>, task: Option<&mut Option<Id>>) -> bool {
     match pick {
         Pick::Changed => true,
         Pick::Create(name) => {
@@ -248,11 +254,23 @@ fn picked(app: &mut App, pick: Pick, project: &mut Option<Id>, task: Option<&mut
             }
             true
         }
-        Pick::Import => {
-            if !app.modal_open() {
-                app.act.open_add(true);
-                app.go(Page::Activities);
+        // a work item from Azure DevOps: it becomes a task now, in the session's project (or the
+        // one its neighbours went to), and is the session's task
+        Pick::Remote(n) => {
+            let dest = project.clone().or_else(|| app.assigned.get(&n).and_then(|i| super::assigned::likely_project(&app.store.db, &i.project)));
+            match (super::assigned::import(app, &n, dest), task) {
+                (Some(tid), Some(t)) => {
+                    if let Some(pid) = app.store.db.task(&Some(tid.clone())).and_then(|x| x.project_id.clone()) {
+                        *project = Some(pid);
+                    }
+                    *t = Some(tid);
+                    true
+                }
+                _ => false,
             }
+        }
+        Pick::LookUp(n) => {
+            super::assigned::look_up(app, &n);
             false
         }
         Pick::None => false,
