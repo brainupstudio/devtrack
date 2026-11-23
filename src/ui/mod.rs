@@ -1830,8 +1830,12 @@ impl App {
                         self.store.resume();
                     }
                     ui.label(RichText::new(trf_m!("Paused · {}", truncate(&session_title(&self.store.db, &e), 30))).size(13.0).color(c.text2));
-                } else if secondary(ui, "Start a session").on_hover_text(tr("Go to Today")).clicked() {
-                    self.go(Page::Today);
+                } else if secondary(ui, "+ Add past time").on_hover_text(tr("Add a session that already happened")).clicked() {
+                    // the same dialog as on Today, over the page you are on: you stay where you were
+                    self.remember_focus(ui.ctx());
+                    let day = today_date().format("%Y-%m-%d").to_string();
+                    self.today.past = today::Past { date: day.clone(), end_date: day, ..today::Past::default() };
+                    self.today.past_open = true;
                 }
                 // Inside a project or a client the page is titled by the record, so the bar
                 // names the section it belongs to; a click returns to the section's first level.

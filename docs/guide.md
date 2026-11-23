@@ -49,6 +49,8 @@ Under the bar, the period's total and a status box: amber when sessions need det
 to show only those), grey while a session runs, green when every session is complete.
 
 **+ Add past time** adds a session that already happened; it never touches the running one.
+The same button is in the top bar of every page when no session is running: the dialog opens
+over the page you are on.
 **Edit session** (from **…** or by clicking a row) changes task, project, client, start, end,
 duration, note, tags and billable. In both, the task list also offers the Azure DevOps work items
 assigned to you that are not in DevTrack yet: choosing one imports it and picks it. Changing the duration moves the end; an end before the start
