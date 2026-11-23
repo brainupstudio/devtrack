@@ -2733,6 +2733,46 @@ mod session_panel_tests {
     }
 
     #[test]
+    fn suggestion_rows_stay_inside_a_narrow_window() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = demo();
+        // a long project and client name, as real ones can be
+        let pid = app.store.db.live_projects().into_iter().next().unwrap().id.clone();
+        if let Some(pr) = app.store.db.projects.get_mut(&pid) {
+            pr.name = "Customer portal website relaunch".into();
+        }
+        let name = "Customer portal website relaunch".to_string();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 900.0));
+        let mut out = None;
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            app.geometry.rows.clear();
+            out = Some(ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| session_panel(app, ui));
+            }));
+        };
+        frame(&mut app, vec![]);
+        let at = app.geometry.rows.iter().find(|(n, _)| n == "start row · description").unwrap().1.center();
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&mut app, vec![egui::Event::PointerMoved(at), press(true)]);
+        frame(&mut app, vec![press(false)]);
+        frame(&mut app, vec![egui::Event::Text(name[..5].to_string())]);
+        frame(&mut app, vec![]);
+        let popup = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("session-suggest"))).expect("suggestions open");
+        let mut texts = 0;
+        for cs in &out.unwrap().shapes {
+            if let egui::Shape::Text(t) = &cs.shape {
+                let r = t.visual_bounding_rect();
+                if popup.contains(r.center()) {
+                    texts += 1;
+                    assert!(r.right() <= popup.right() + 0.5, "text past the list's edge: {r:?} in {popup:?}");
+                }
+            }
+        }
+        assert!(texts > 2, "rows were drawn");
+    }
+
+    #[test]
     fn typing_in_the_description_opens_suggestions() {
         let ctx = egui::Context::default();
         install_fonts(&ctx);

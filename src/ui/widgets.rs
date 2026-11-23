@@ -1370,18 +1370,58 @@ pub fn pick_row(ui: &mut Ui, selected: bool, color: Option<Color32>, name: &str,
         ui.painter().circle_filled(egui::pos2(x + 3.5, rect.center().y), 3.5, col);
     }
     x += 14.0;
-    let g = ui.painter().layout_no_wrap(truncate(name, 40), if selected { medium(14.0) } else { sans(14.0) }, c.text);
+    // name and detail share the row and never cross its right edge: the detail gives way first,
+    // down to a short stub, then the name ends in "…" too
+    let room = rect.right() - 10.0 - x;
+    let name_font = if selected { medium(14.0) } else { sans(14.0) };
+    let sub_job = |max: f32| {
+        let mut job = if sub_mono { mixed_job(sub, 12.0, c.text2, sans(12.0), mono_font(12.0)) } else { mixed_job(sub, 12.0, c.text2, sans(12.0), sans(12.0)) };
+        one_line(&mut job, max);
+        job
+    };
+    let full_name = ui.painter().layout_no_wrap(name.to_string(), name_font.clone(), c.text).size().x;
+    let full_sub = if sub.is_empty() { 0.0 } else { ui.painter().layout_job(sub_job(f32::INFINITY)).size().x };
+    let (name_max, sub_max) = row_split(room, full_name, full_sub, 10.0, 80.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_string(), name_font, c.text);
+    one_line(&mut job, name_max);
+    let g = ui.painter().layout_job(job);
     let nw = g.size().x;
     ui.painter().galley(egui::pos2(x, rect.center().y - g.size().y / 2.0), g, c.text);
-    if !sub.is_empty() {
-        let job = if sub_mono { mixed_job(sub, 12.0, c.text2, sans(12.0), mono_font(12.0)) } else { mixed_job(sub, 12.0, c.text2, sans(12.0), sans(12.0)) };
-        let g2 = ui.painter().layout_job(job);
+    if !sub.is_empty() && sub_max > 0.0 {
+        let g2 = ui.painter().layout_job(sub_job(sub_max));
         ui.painter().galley(egui::pos2(x + nw + 10.0, rect.center().y - g2.size().y / 2.0), g2, c.text2);
     }
     if resp.has_focus() {
         focus_ring(ui, rect);
     }
     resp.clicked()
+}
+
+/// Keeps a text on one line of at most `max` points, ending in "…" when it is longer.
+fn one_line(job: &mut egui::text::LayoutJob, max: f32) {
+    job.wrap = egui::text::TextWrapping { max_width: max, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+}
+
+/// How a row's `room` is shared between a name `name_w` wide and a detail `sub_w` wide with
+/// `gap` between them: both whole when they fit; otherwise the detail shrinks, down to
+/// `sub_min`, and only then the name. A detail with no room at all is left out (0).
+fn row_split(room: f32, name_w: f32, sub_w: f32, gap: f32, sub_min: f32) -> (f32, f32) {
+    if sub_w <= 0.0 {
+        return (room, 0.0);
+    }
+    if name_w + gap + sub_w <= room {
+        return (name_w.ceil() + 1.0, sub_w.ceil() + 1.0);
+    }
+    let sub_keep = sub_w.min(sub_min);
+    if name_w + gap + sub_keep <= room {
+        return (name_w.ceil() + 1.0, room - name_w.ceil() - 1.0 - gap);
+    }
+    let name_max = room - gap - sub_keep;
+    if name_max < room * 0.5 {
+        // too narrow for both: the name alone
+        return (room, 0.0);
+    }
+    (name_max, sub_keep)
 }
 
 /// Review pictures: open the timer's project menu once (the "timer-project" scene).
@@ -2628,5 +2668,26 @@ mod logo_tests {
         assert!(mark_turn(start).abs() < 1e-4);
         assert!((mark_turn(start + turn / 4.0) - tau / 4.0).abs() < 1e-3);
         assert!((mark_turn(start + turn / 2.0) - tau / 2.0).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod pick_row_tests {
+    use super::row_split;
+
+    #[test]
+    fn name_and_detail_never_pass_the_row() {
+        // both fit: as they are
+        let (n, d) = row_split(400.0, 150.0, 200.0, 10.0, 80.0);
+        assert!(n >= 150.0 && d >= 200.0 && n + 10.0 + d <= 402.0);
+        // the detail gives way first
+        let (n, d) = row_split(400.0, 150.0, 400.0, 10.0, 80.0);
+        assert!(n >= 150.0 && n + 10.0 + d <= 400.5);
+        // then the name, keeping a stub of detail
+        let (n, d) = row_split(400.0, 500.0, 300.0, 10.0, 80.0);
+        assert_eq!(d, 80.0);
+        assert!(n + 10.0 + d <= 400.0);
+        // no detail: the name has the whole row
+        assert_eq!(row_split(300.0, 500.0, 0.0, 10.0, 80.0), (300.0, 0.0));
     }
 }
