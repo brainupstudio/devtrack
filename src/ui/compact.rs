@@ -91,7 +91,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         egui::TopBottomPanel::top("compact-session").frame(egui::Frame::new().fill(c.canvas).inner_margin(egui::Margin { left: 16, right: 16, top: 16, bottom: 8 })).show_separator_line(false).show(ctx, |ui| top(app, ui));
     }
     // ---- history ----
-    egui::CentralPanel::default().frame(egui::Frame::new().fill(c.canvas).inner_margin(egui::Margin { left: 16, right: 4, top: 0, bottom: 8 })).show(ctx, |ui| {
+    // no margin below: the rows scroll right up to the footer's line, not to a gap above it
+    egui::CentralPanel::default().frame(egui::Frame::new().fill(c.canvas).inner_margin(egui::Margin { left: 16, right: 4, top: 0, bottom: 0 })).show(ctx, |ui| {
         let mut scroll = egui::ScrollArea::vertical().id_salt("compact-history").auto_shrink([false, false]);
         if SHOT_SCROLLED.load(std::sync::atomic::Ordering::Relaxed) {
             // review pictures: a day's band pinned at the top, the next one about to push it
@@ -386,6 +387,8 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
     if link_btn(ui, "Load earlier").on_hover_text(tr("Show seven more days")).clicked() {
         app.compact_ui.days_loaded += 7;
     }
+    // the room the panel's margin gave, now at the end of the list
+    ui.add_space(12.0);
     if let Some((k, e)) = action {
         match k {
             0 => app.store.continue_entry(&e.id),
