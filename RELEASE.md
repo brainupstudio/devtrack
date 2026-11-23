@@ -41,7 +41,7 @@ Il DMG finisce in `dist/` (ignorata da Git).
 
 ## Firma
 
-Su macOS il workflow firma l'app con un certificato autoprodotto, sempre lo stesso (segreti `MACOS_SIGN_P12`, il file .p12 in base64, e `MACOS_SIGN_P12_PASSWORD`). Così ogni versione ha la stessa identità e il portachiavi ricorda "Consenti sempre" anche dopo un aggiornamento. Non toglie l'avviso di Gatekeeper: per quello serve il certificato Developer ID descritto sotto. Senza i segreti, per esempio in un fork, l'app viene firmata ad hoc.
+Su macOS il workflow firma l'app con un certificato autoprodotto, sempre lo stesso (segreti `MACOS_SIGN_P12`, il file .p12 in base64, e `MACOS_SIGN_P12_PASSWORD`). Così ogni versione ha la stessa identità di firma. Non basta però al portachiavi: senza un Team ID di Apple, macOS lega l'accesso anche all'impronta del singolo eseguibile (partizione `cdhash:`), quindi dopo ogni aggiornamento chiede una volta la password. Non toglie nemmeno l'avviso di Gatekeeper. Per entrambe le cose serve il certificato Developer ID descritto sotto. Senza i segreti, per esempio in un fork, l'app viene firmata ad hoc.
 
 Senza una firma riconosciuta i sistemi mostrano un avviso al primo avvio dei pacchetti scaricati dal browser; le istruzioni per superarlo sono in `CHANGELOG.md`. Gli script di installazione del sito (`curl … | sh`, `irm … | iex`) scaricano senza il segno "da internet", quindi l'avviso non compare: è la strada gratuita finché l'app non è firmata.
 
