@@ -1,20 +1,17 @@
-## DevTrack 0.1.7
+## DevTrack 0.1.8
 
 ### Novità
-- **Avviare una sessione su un work item di Azure DevOps non ancora importato:** nel campo attività di Oggi compaiono anche i work item assegnati a te che non sono ancora in DevTrack, con il progetto in cui andranno. Diventano un'attività quando premi Avvia. Un #numero non assegnato a te si può cercare dai suggerimenti. L'elenco si aggiorna da solo e funziona anche senza rete.
-- **Lavoro, ripensato:** i tab sono Attività, Progetti e Clienti, e Lavoro si apre su Attività. Un clic su un'attività la apre sul posto, con ore previste, dettagli e ultime sessioni, e porta al progetto e al cliente con un clic.
-- **Stime a colpo d'occhio:** "registrato / previste" anche nel tab Attività, con un **!** quando superi la stima, e un filtro Stime per trovare le attività oltre le ore previste o senza.
-- **Tornare indietro come sei arrivato:** il percorso sopra progetti e clienti mostra la strada fatta; ogni passo e Indietro (Alt+←) tornano lì, con la lista com'era.
-- **Una sola ricerca:** lo stesso campo in tutte le liste di Lavoro, anche tra i progetti di un cliente. ⌘F per cercare, Esc per svuotare.
-- **Aggiungi attività** anche dal tab Attività, scegliendo il progetto.
-- **Finestre uniformi:** nuova attività, nuovo progetto e nuovo cliente hanno la stessa finestra e chiedono prima di perdere quello che hai scritto.
+- **Timesheet più chiaro:** sotto la griglia, "Aggiungi un progetto alla settimana" e "Riempi dalla settimana scorsa" hanno un'icona **i** che spiega cosa fanno; quella della copia dice quante celle riempirà. Aggiunto un progetto, il cursore va nella sua cella di oggi. Una riga senza ore si toglie con ×.
+
+### Correzioni
+- **Aggiornamenti:** DevTrack cerca una nuova versione ogni volta che si apre, e ogni 6 ore finché resta aperta. Prima lo faceva al massimo una volta al giorno, quindi una versione appena uscita poteva non essere vista. *Da questa versione in poi; per arrivare alla 0.1.8 usa ancora "Controlla ora" in Impostazioni › Generale.*
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.7-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.7-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.7-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.8-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.8-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.8-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -33,6 +30,17 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.7
+
+### Novità
+- **Avviare una sessione su un work item di Azure DevOps non ancora importato:** nel campo attività di Oggi compaiono anche i work item assegnati a te che non sono ancora in DevTrack, con il progetto in cui andranno. Diventano un'attività quando premi Avvia. Un #numero non assegnato a te si può cercare dai suggerimenti. L'elenco si aggiorna da solo e funziona anche senza rete.
+- **Lavoro, ripensato:** i tab sono Attività, Progetti e Clienti, e Lavoro si apre su Attività. Un clic su un'attività la apre sul posto, con ore previste, dettagli e ultime sessioni, e porta al progetto e al cliente con un clic.
+- **Stime a colpo d'occhio:** "registrato / previste" anche nel tab Attività, con un **!** quando superi la stima, e un filtro Stime per trovare le attività oltre le ore previste o senza.
+- **Tornare indietro come sei arrivato:** il percorso sopra progetti e clienti mostra la strada fatta; ogni passo e Indietro (Alt+←) tornano lì, con la lista com'era.
+- **Una sola ricerca:** lo stesso campo in tutte le liste di Lavoro, anche tra i progetti di un cliente. ⌘F per cercare, Esc per svuotare.
+- **Aggiungi attività** anche dal tab Attività, scegliendo il progetto.
+- **Finestre uniformi:** nuova attività, nuovo progetto e nuovo cliente hanno la stessa finestra e chiedono prima di perdere quello che hai scritto.
 
 ## DevTrack 0.1.6
 
