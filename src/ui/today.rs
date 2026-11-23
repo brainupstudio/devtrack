@@ -1594,7 +1594,11 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
     let now = now_secs();
     // days off are left out, unless something was recorded on them
     let worked: std::collections::BTreeSet<NaiveDate> = entries.iter().map(|e| local_date(e.start)).collect();
-    let days: Vec<NaiveDate> = period.days().into_iter().filter(|d| app.store.db.settings.is_work_day(*d) || worked.contains(d)).collect();
+    let mut days: Vec<NaiveDate> = period.days().into_iter().filter(|d| app.store.db.settings.is_work_day(*d) || worked.contains(d)).collect();
+    // no working day in the week (all set as days off): show them all rather than no column
+    if days.is_empty() {
+        days = period.days();
+    }
     // time per project and day, from finished sessions (the grid edits those)
     let mut rows: Vec<(Option<Id>, Vec<i64>)> = vec![];
     let mut running_on: Vec<(Option<Id>, NaiveDate)> = vec![];
@@ -1841,7 +1845,11 @@ fn timeline(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Pe
     let fmt = app.store.db.settings.duration_format;
     // days off are left out, unless a session falls on them
     let busy: std::collections::BTreeSet<NaiveDate> = entries.iter().flat_map(|e| day_pieces(e, now).into_iter().map(|x| x.0)).collect();
-    let days: Vec<NaiveDate> = period.days().into_iter().filter(|d| app.store.db.settings.is_work_day(*d) || busy.contains(d)).collect();
+    let mut days: Vec<NaiveDate> = period.days().into_iter().filter(|d| app.store.db.settings.is_work_day(*d) || busy.contains(d)).collect();
+    // a day off on its own (Day view on a Sunday) is still shown: there is always a column
+    if days.is_empty() {
+        days = period.days();
+    }
     // the hours shown run from the first session to the last (at least four hours, 8–18 when
     // there is nothing to show), not from a fixed working day
     let mut first_h = 24i64;
@@ -2626,6 +2634,36 @@ mod session_panel_tests {
 
     fn demo() -> App {
         App::new(Store::in_memory(build_state(now_secs(), DemoState::Ready, false)), None)
+    }
+
+    /// A day off with no sessions (Sunday, Day view) used to leave the calendar with no column,
+    /// a width of NaN and a crash in egui; the timesheet the same with a week of days off.
+    #[test]
+    fn calendar_and_timesheet_draw_on_days_off() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = demo();
+        let mut sunday = today();
+        while sunday.weekday() != chrono::Weekday::Sun || app.store.db.live_entries().any(|e| local_date(e.start) == sunday) {
+            sunday += CDur::days(1);
+        }
+        let monday = app.store.db.settings.week_starts_monday;
+        for (timesheet, kind) in [(false, PeriodKind::Day), (true, PeriodKind::Week)] {
+            app.today.timeline = !timesheet;
+            app.today.timesheet = timesheet;
+            app.today.period = Period::containing(kind, sunday, monday);
+            if timesheet {
+                // no working day at all this week
+                let mut s = app.store.db.settings.clone();
+                s.work_days = 0;
+                app.store.db.settings = s;
+            }
+            for _ in 0..3 {
+                let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0))), ..Default::default() }, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| page(&mut app, ui));
+                });
+            }
+        }
     }
 
     #[test]
