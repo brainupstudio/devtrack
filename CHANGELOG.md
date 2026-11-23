@@ -1,15 +1,16 @@
-## DevTrack 0.1.10
+## DevTrack 0.1.11
 
 ### Novità
-- **Scegliere la data dal campo del periodo:** in Oggi, Rendicontazione e Statistiche la data tra ‹ e › ora si clicca. Puoi scrivere una data (23/11/2026, 23/11 o 2026-11-23) e premere Invio, oppure sceglierla su un piccolo calendario che evidenzia il giorno, la settimana o il mese in vista. La vista resta su Giorno, Settimana o Mese.
-- **Finestra compatta più leggibile:** ogni giorno delle sessioni recenti è una fascia colorata con il giorno, la data e il totale, che separa chiaramente un giorno dall'altro.
+- **Finestra compatta, modifica veloce:** cliccando una sessione conclusa si apre una piccola finestra accanto alla finestra compatta, con attività, progetto, durata, inizio e fine e il giorno. Note, tag e fatturabile restano nella finestra completa. Su Linux con Wayland la stessa modifica si apre dentro la finestra compatta.
+- **Finestra compatta, sessione in corso:** attività, progetto e cliente si possono cambiare mentre il timer corre, senza fermarlo. Il pallino verde accanto al tempo sostituisce la riga "In registrazione".
+- **Finestra compatta, Impostazioni:** in fondo c'è la stessa voce della barra laterale.
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.10-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.10-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.10-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.11-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.11-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.11-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -28,6 +29,12 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.10
+
+### Novità
+- **Scegliere la data dal campo del periodo:** in Oggi, Rendicontazione e Statistiche la data tra ‹ e › ora si clicca. Puoi scrivere una data (23/11/2026, 23/11 o 2026-11-23) e premere Invio, oppure sceglierla su un piccolo calendario che evidenzia il giorno, la settimana o il mese in vista. La vista resta su Giorno, Settimana o Mese.
+- **Finestra compatta più leggibile:** ogni giorno delle sessioni recenti è una fascia colorata con il giorno, la data e il totale, che separa chiaramente un giorno dall'altro.
 
 ## DevTrack 0.1.9
 
