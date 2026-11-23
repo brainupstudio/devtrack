@@ -39,7 +39,11 @@ changes when it started.
   ▷ starts it again, **…** edits, duplicates or deletes it.
 - **Timeline**: the sessions placed on the hours of the day; drag to create, move or stretch
   them (the step is set in **Settings › Time & days › Sessions**).
-- **Timesheet**: one row per project, one column per day.
+- **Timesheet**: one row per project, one column per day. Type a day's hours in a cell (8, 1,5
+  or 1:30): DevTrack lengthens that day's last session on the project, or adds one. Under the
+  grid, **Add a project to the week** adds the row of a project with no time yet (× removes a
+  row that has no hours), and **Copy last week** copies last week's hours into the empty cells
+  up to today. The **i** beside each one says what it will do.
 
 Under the bar, the period's total and a status box: amber when sessions need details (click it
 to show only those), grey while a session runs, green when every session is complete.

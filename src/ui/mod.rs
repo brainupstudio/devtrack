@@ -599,7 +599,7 @@ impl App {
                 self.settings.tab = settings::Tab::Data;
                 Page::Settings
             }
-            "sheet" => {
+            "sheet" | "sheet-added" => {
                 self.today.timesheet = true;
                 let monday = self.store.db.settings.week_starts_monday;
                 self.today.period = Period::containing(PeriodKind::Week, today_date(), monday);
@@ -607,6 +607,13 @@ impl App {
             }
             "conversions" => {
                 self.settings.tab = settings::Tab::Conversions;
+                // a project added to the week with no hours yet: its row shows ×
+                if name == "sheet-added" {
+                    let used: Vec<Option<Id>> = self.store.db.live_entries().map(|e| e.project_id.clone()).collect();
+                    if let Some(p) = self.store.db.live_projects().into_iter().find(|p| !p.archived && !used.contains(&Some(p.id.clone()))) {
+                        self.today.sheet_rows.push(Some(p.id.clone()));
+                    }
+                }
                 Page::Settings
             }
             "connections" => {

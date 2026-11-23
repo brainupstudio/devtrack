@@ -427,7 +427,7 @@ pub static IT: &[(&str, &str)] = &[
     ("A session with several tags counts under each of them.", "Una sessione con più tag conta sotto ciascuno."),
     ("Timesheet", "Timesheet"),
     ("Total", "Totale"),
-    ("No time this week. Add a row and type the hours, or copy last week.", "Nessun tempo in questa settimana. Aggiungi una riga e scrivi le ore, oppure copia la settimana scorsa."),
+    ("No time this week. Add a project below and type its hours, or fill from last week.", "Nessun tempo in questa settimana. Aggiungi un progetto qui sotto e scrivi le sue ore, oppure riempi dalla settimana scorsa."),
     ("A session is running here: its time is added when it stops.", "Qui c'è una sessione in corso: il suo tempo si aggiunge quando la fermi."),
     ("Hours (8, 1,5) or hours:minutes (1:30). Empty removes the time.", "Ore (8, 1,5) oppure ore:minuti (1:30). Vuoto toglie il tempo."),
     ("Copy last week", "Copia la settimana scorsa"),
@@ -1273,4 +1273,13 @@ pub static IT: &[(&str, &str)] = &[
     ("Not assigned to you, or not read yet", "Non assegnato a te, o non ancora letto"),
     ("! Choose a project for this work item", "! Scegli un progetto per questo work item"),
     ("Read the work items assigned to you again", "Rileggi i work item assegnati a te"),
+    // Today: the timesheet footer
+    ("Add a project to the week", "Aggiungi un progetto alla settimana"),
+    ("Fill from last week", "Riempi dalla settimana scorsa"),
+    ("Last week has no hours to copy.", "La settimana scorsa non ha ore da copiare."),
+    ("The days last week had hours on are already filled here, or closed.", "I giorni con ore la settimana scorsa qui sono già compilati, o chiusi."),
+    ("Its row appears in the grid: type the hours of each day in it. A row with no hours is removed with ×.", "La sua riga compare nella griglia: scrivi lì le ore di ogni giorno. Una riga senza ore si toglie con ×."),
+    ("Copies last week's hours into {} empty cell, project by project. Only empty cells up to today: filled cells and closed days stay as they are.", "Copia le ore della settimana scorsa in {} cella vuota, progetto per progetto. Solo le celle vuote fino a oggi: le celle già compilate e i giorni chiusi restano come sono."),
+    ("Copies last week's hours into {} empty cells, project by project. Only empty cells up to today: filled cells and closed days stay as they are.", "Copia le ore della settimana scorsa in {} celle vuote, progetto per progetto. Solo le celle vuote fino a oggi: le celle già compilate e i giorni chiusi restano come sono."),
+    ("Remove this row", "Togli questa riga"),
 ];

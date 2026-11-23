@@ -589,8 +589,14 @@ the widest, the full breakdown on hover); it is hidden when there is one project
   removes the time. More time lengthens that day's last session on the project, or adds one
   after the day's last session (from 9:00 at the earliest); less time shortens the last
   sessions. Future days are disabled; a running session is not counted until it stops.
-  "Choose project" adds an empty row; "Copy last week" fills the empty cells with last week's
-  hours. Below 780 px the grid keeps its width and scrolls sideways: the one place that does.
+  Under the grid, two labelled fields side by side (top-aligned, stacking when narrow); what each
+  does sits behind an "i" next to its label (`field_info` / `info_tip`, hover; the text is also
+  the accessible name). **Add a project to the week**: a project picker; the row appears and the
+  cursor goes to its cell for today, or the week's last day that can be filled. A row with no
+  hours (one just added, or emptied) has a × in a last column that removes it; a row with hours
+  goes away by emptying its cells. **Fill from last week**: the button "Copy last week"; its
+  "i" says how many empty cells it fills. With nothing to fill it is disabled and the "i" and its
+  own tooltip say why: last week is empty, or those days are already filled or closed. Below 780 px the grid keeps its width and scrolls sideways: the one place that does.
 - Scenes: `--page sheet`, `--page week`.
 
 ## Trying things on sample data (19 Nov 2026)

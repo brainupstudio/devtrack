@@ -67,6 +67,8 @@ pub struct TodayState {
     pub timesheet: bool,
     /// Projects added to the grid as empty rows, until they have time.
     pub sheet_rows: Vec<Option<Id>>,
+    /// The cell to put the cursor in once (a row just added: its first day to fill).
+    pub sheet_focus: Option<(Option<Id>, NaiveDate)>,
     pub only_incomplete: bool,
     pub edit: Option<Edit>,
     pub run_desc: Option<(Id, String)>,
@@ -87,7 +89,7 @@ pub struct TodayState {
 
 impl TodayState {
     pub fn new(period: Period) -> Self {
-        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], only_incomplete: false, edit: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
+        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, only_incomplete: false, edit: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
     }
 }
 
@@ -1608,7 +1610,9 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
     ui.set_min_width(w);
     let cell_w = 72.0f32.min(((w - 180.0 - 84.0) / days.len() as f32 - ROW_GAP).max(52.0));
     let total_w = 84.0;
-    let name_w = (w - (cell_w + ROW_GAP) * days.len() as f32 - total_w - ROW_GAP).max(120.0);
+    // the last column: × on a row that has no hours (one added, or emptied)
+    let remove_w = CTRL_H;
+    let name_w = (w - (cell_w + ROW_GAP) * days.len() as f32 - total_w - ROW_GAP - remove_w - ROW_GAP).max(120.0);
     let right = |ui: &mut egui::Ui, width: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
         ui.allocate_ui_with_layout(egui::vec2(width, CTRL_H), egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.set_width(width); add(ui); });
     };
@@ -1621,14 +1625,16 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
             right(ui, cell_w, &mut |ui| { ui.label(RichText::new(&text).size(12.0).color(if *d == today() { c.text } else { c.text2 })); });
         }
         right(ui, total_w, &mut |ui| { label(ui, "Total"); });
+        ui.add_space(remove_w);
     });
     divider(ui);
     if rows.is_empty() {
         ui.add_space(ROW_GAP);
-        meta(ui, "No time this week. Add a row and type the hours, or copy last week.");
+        meta(ui, "No time this week. Add a project below and type its hours, or fill from last week.");
     }
     let mut change: Option<(Option<Id>, NaiveDate, i64)> = None;
     let mut refused = false;
+    let mut remove: Option<Option<Id>> = None;
     for (pid, cells) in &rows {
         row(ui, 44.0, |ui| {
             ui.spacing_mut().item_spacing.x = ROW_GAP;
@@ -1647,6 +1653,10 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
                 let future = *d > today();
                 let live = running_on.iter().any(|(p, day)| p == pid && day == d);
                 let r = ui.add_enabled_ui(!future, |ui| input(ui, &mut text, Field::new("Tracked", cell_w).mono())).inner;
+                if app.today.sheet_focus.as_ref().is_some_and(|(fp, fd)| fp == pid && fd == d) {
+                    app.today.sheet_focus = None;
+                    r.request_focus();
+                }
                 let tip = if live { tr("A session is running here: its time is added when it stops.") } else { tr("Hours (8, 1,5) or hours:minutes (1:30). Empty removes the time.") };
                 let r = r.on_hover_text(tip);
                 if r.lost_focus() {
@@ -1664,6 +1674,15 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
             }
             let sum: i64 = cells.iter().sum();
             right(ui, total_w, &mut |ui| { mixed(ui, &if sum == 0 { "—".to_string() } else { words(sum) }, 14.0, Some(if sum == 0 { c.text2 } else { c.text })); });
+            // a row with hours goes away when its cells are emptied; one without is removed here
+            let busy = running_on.iter().any(|(p, _)| p == pid);
+            if sum == 0 && !busy {
+                let r = icon_ghost(ui, Glyph::Close, "Remove this row");
+                app.geometry.rows.push((format!("sheet row · remove · {}", pid.clone().unwrap_or_default()), r.rect));
+                if r.clicked() { remove = Some(pid.clone()); }
+            } else {
+                ui.add_space(remove_w);
+            }
         });
         divider(ui);
     }
@@ -1678,28 +1697,73 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
             right(ui, cell_w, &mut |ui| { ui.label(mono(if sum == 0 { "—".to_string() } else { cell_text(sum) }, 13.0).color(if sum == 0 { c.text2 } else { c.text })); });
         }
         right(ui, total_w, &mut |ui| { mixed_medium(ui, &if grand == 0 { "—".to_string() } else { words(grand) }, 14.0); });
+        ui.add_space(remove_w);
     });
     ui.add_space(GROUP_GAP);
-    // add a row · copy last week
+    // add a row · copy last week: each with its label above and what it does below, as every
+    // field; the copy says beforehand how many cells it fills, and why it can't
+    let prev = Period { kind: PeriodKind::Week, start: period.start - CDur::days(7), end: period.start };
+    let last: Vec<TimeEntry> = entries_in(&app.store.db, &prev, now).into_iter().filter(|e| e.stop.is_some()).cloned().collect();
+    let mut wanted: Vec<(Option<Id>, NaiveDate, i64)> = vec![];
+    for e in &last {
+        let day = local_date(e.start) + CDur::days(7);
+        let secs = e.stop.unwrap_or(e.start) - e.start;
+        match wanted.iter_mut().find(|x| x.0 == e.project_id && x.1 == day) {
+            Some(x) => x.2 += secs,
+            None => wanted.push((e.project_id.clone(), day, secs)),
+        }
+    }
+    let fillable: Vec<(Option<Id>, NaiveDate, i64)> = wanted
+        .iter()
+        .filter(|(pid, day, _)| {
+            let has = rows.iter().find(|r| &r.0 == pid).and_then(|r| days.iter().position(|d| d == day).map(|i| r.1[i] > 0)).unwrap_or(false);
+            !has && *day <= today() && !report::locked(&app.store.db, local_time_of(*day, 12 * 3600))
+        })
+        .cloned()
+        .collect();
     let rp = recent_projects(&app.store.db);
     let mut add: Option<Id> = None;
     let mut copy = false;
-    row_wrapped(ui, CTRL_H, |ui| {
-        ui.spacing_mut().item_spacing.x = ROW_GAP;
-        let mut pick: Option<Id> = None;
-        if matches!(project_picker(ui, "sheet-add-row", &app.store.db, &rp, &mut pick, 260.0), Pick::Changed) {
-            add = pick;
-        }
-        if secondary(ui, "Copy last week").on_hover_text(tr("Fills the empty cells with last week's hours, project by project")).clicked() {
-            copy = true;
-        }
+    let col_w = 340.0f32.min(ui.available_width());
+    // two fields side by side, top-aligned; they stack when the window is narrow
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true), |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(GROUP_GAP * 2.0, GROUP_GAP);
+        col(ui, col_w, 0.0, |ui| {
+            field_info(ui, "Add a project to the week", "Its row appears in the grid: type the hours of each day in it. A row with no hours is removed with ×.", |ui| {
+                let mut pick: Option<Id> = None;
+                if matches!(project_picker(ui, "sheet-add-row", &app.store.db, &rp, &mut pick, col_w), Pick::Changed) {
+                    add = pick;
+                }
+            });
+        });
+        col(ui, col_w, 0.0, |ui| {
+            // why the button can't act, said where its explanation is
+            let help = if !fillable.is_empty() {
+                plural(fillable.len() as i64, "Copies last week's hours into {} empty cell, project by project. Only empty cells up to today: filled cells and closed days stay as they are.", "Copies last week's hours into {} empty cells, project by project. Only empty cells up to today: filled cells and closed days stay as they are.")
+            } else if wanted.is_empty() {
+                tr("Last week has no hours to copy.")
+            } else {
+                tr("The days last week had hours on are already filled here, or closed.")
+            };
+            field_info(ui, "Fill from last week", &help, |ui| {
+                copy = button_w(ui, Kind::Secondary, "Copy last week", 0.0, !fillable.is_empty()).on_disabled_hover_text(&help).clicked();
+            });
+        });
     });
     if refused {
         app.notify(tr("That isn't a time. Use hours (8, 1,5) or hours:minutes (1:30)."));
     }
+    if let Some(pid) = remove {
+        app.today.sheet_rows.retain(|r| *r != pid);
+    }
     if let Some(pid) = add {
         if !app.today.sheet_rows.contains(&Some(pid.clone())) {
-            app.today.sheet_rows.push(Some(pid));
+            app.today.sheet_rows.push(Some(pid.clone()));
+        }
+        // the cursor goes where the hours go: today, or the week's last day that can be filled
+        let day = days.iter().copied().filter(|d| *d <= today()).last().or(days.first().copied());
+        if let Some(day) = day {
+            app.today.sheet_focus = Some((Some(pid), day));
         }
     }
     if let Some((pid, day, secs)) = change {
@@ -1711,21 +1775,9 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
         }
     }
     if copy {
-        let prev = Period { kind: PeriodKind::Week, start: period.start - CDur::days(7), end: period.start };
         let mut filled = 0;
-        let last: Vec<TimeEntry> = entries_in(&app.store.db, &prev, now).into_iter().filter(|e| e.stop.is_some()).cloned().collect();
-        let mut wanted: Vec<(Option<Id>, NaiveDate, i64)> = vec![];
-        for e in &last {
-            let day = local_date(e.start) + CDur::days(7);
-            let secs = e.stop.unwrap_or(e.start) - e.start;
-            match wanted.iter_mut().find(|x| x.0 == e.project_id && x.1 == day) {
-                Some(x) => x.2 += secs,
-                None => wanted.push((e.project_id.clone(), day, secs)),
-            }
-        }
-        for (pid, day, secs) in wanted {
-            let has = rows.iter().find(|r| r.0 == pid).and_then(|r| days.iter().position(|d| *d == day).map(|i| r.1[i] > 0)).unwrap_or(false);
-            if !has && day <= today() && !report::locked(&app.store.db, local_time_of(day, 12 * 3600)) && app.store.set_day_total(&pid, day, secs) {
+        for (pid, day, secs) in fillable {
+            if app.store.set_day_total(&pid, day, secs) {
                 filled += 1;
             }
         }

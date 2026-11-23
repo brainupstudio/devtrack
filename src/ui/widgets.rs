@@ -2471,3 +2471,34 @@ pub fn form_dialog(ctx: &egui::Context, dark: bool, d: FormDialog, confirm_disca
     }
     out
 }
+
+/// A small "i" beside a label: what the control does, on hover. Its accessible name is the text,
+/// so screen readers get it without hovering.
+pub fn info_tip(ui: &mut Ui, text: &str) -> egui::Response {
+    let c = p(ui);
+    let text = tr(text);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::hover());
+    let col = if resp.hovered() { c.text } else { c.text2 };
+    let center = rect.center();
+    ui.painter().circle_stroke(center, 6.5, Stroke::new(1.2, col));
+    ui.painter().circle_filled(center + egui::vec2(0.0, -2.8), 1.0, col);
+    ui.painter().line_segment([center + egui::vec2(0.0, -0.6), center + egui::vec2(0.0, 3.4)], Stroke::new(1.4, col));
+    let t = text.clone();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, t.clone()));
+    resp.on_hover_text(text)
+}
+
+/// A field's label with its explanation behind an "i", for controls whose behaviour needs a
+/// sentence but whose place is tight: label and icon on one line, the control under them.
+pub fn field_info<R>(ui: &mut Ui, label_txt: &str, info: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = LABEL_GAP;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            label(ui, label_txt);
+            info_tip(ui, info);
+        });
+        add(ui)
+    })
+    .inner
+}
