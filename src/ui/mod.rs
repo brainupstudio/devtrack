@@ -43,17 +43,40 @@ pub const RAIL_W: f32 = if cfg!(target_os = "macos") { 76.0 } else { 64.0 };
 
 /// Makes `rect` move the window when dragged and zoom it on a double click, like a title bar.
 /// Call it before the controls drawn in the same area, so they stay on top of it.
+/// The compact window only moves: zooming a small floating window makes no sense.
 pub fn window_drag(ui: &egui::Ui, rect: egui::Rect, id: &str) {
     if TITLE_STRIP == 0.0 {
         return;
     }
     let resp = ui.interact(rect, egui::Id::new(("window-drag", id)), Sense::click_and_drag());
-    if resp.double_clicked() {
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        // the system moves the window from here and keeps the button's release: forget any
+        // click before, so the next press can't pair with it into a double click
+        ui.data_mut(|d| d.remove::<(f64, egui::Pos2)>(egui::Id::new("window-drag-click")));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        return;
+    }
+    if id == "compact" || !resp.clicked() {
+        return;
+    }
+    // a double click is two real clicks (press and release, no move) close in time and place;
+    // egui's own counts presses, and a press that started a drag is one of them
+    let now = ui.input(|i| i.time);
+    let at = resp.interact_pointer_pos().unwrap_or_default();
+    let key = egui::Id::new("window-drag-click");
+    let last: Option<(f64, egui::Pos2)> = ui.data(|d| d.get_temp(key));
+    if is_double_click(last, now, at) {
+        ui.data_mut(|d| d.remove::<(f64, egui::Pos2)>(key));
         let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-    } else if resp.drag_started_by(egui::PointerButton::Primary) {
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    } else {
+        ui.data_mut(|d| d.insert_temp(key, (now, at)));
     }
+}
+
+/// A click at `at` and `now` completes a double click with the `last` one.
+fn is_double_click(last: Option<(f64, egui::Pos2)>, now: f64, at: egui::Pos2) -> bool {
+    last.is_some_and(|(t, p)| now - t <= 0.4 && p.distance(at) <= 4.0)
 }
 pub const FADE_MS: f32 = 200.0;
 pub const COMPACT_SIZE: [f32; 2] = [430.0, 720.0];
@@ -2234,6 +2257,15 @@ mod tests {
         // rapid navigation continues from the current opacity, never back to zero
         let g = Fade { start, from: 0.6 };
         assert!(g.opacity(start) >= 0.6);
+    }
+
+    #[test]
+    fn only_two_quick_clicks_in_one_place_zoom_the_window() {
+        let p = egui::pos2(100.0, 10.0);
+        assert!(is_double_click(Some((1.0, p)), 1.3, p));
+        assert!(!is_double_click(Some((1.0, p)), 1.6, p));
+        assert!(!is_double_click(Some((1.0, p)), 1.2, egui::pos2(130.0, 10.0)));
+        assert!(!is_double_click(None, 1.2, p));
     }
 
     #[test]
