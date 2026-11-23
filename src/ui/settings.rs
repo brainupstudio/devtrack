@@ -1,6 +1,6 @@
-//! Settings in a bounded column, in six tabs by what the person wants to do: General (startup,
+//! Settings in a bounded column, in seven tabs by what the person wants to do: General (startup,
 //! appearance, keyboard), Time & days, Platforms, Connections (short setup, state and recovery;
-//! HTTP details only under Diagnostics), Sync and Data. Settings are rows in titled panels:
+//! HTTP details only under Diagnostics), AI assistants (`assistants.rs`), Sync and Data. Settings are rows in titled panels:
 //! label and help on the left, the control on the right (`settings_group`, `SettingRows`).
 
 use super::jobs::JobOut;
@@ -32,6 +32,8 @@ pub enum Tab {
     Conversions,
     Sync,
     Connections,
+    /// What AI assistants may read through MCP, and how to connect them.
+    Assistants,
     Data,
 }
 
@@ -131,20 +133,20 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     page_header(ui, "Settings", "", |_| {});
     // by what the person wants to do: the app itself, time, where hours go, where work comes
     // from, other devices, the data
-    let tabs = [Tab::Display, Tab::Time, Tab::Conversions, Tab::Connections, Tab::Sync, Tab::Data];
-    let names = ["General", "Time & days", "Platforms", "Connections", "Sync", "Data"];
+    let tabs = [Tab::Display, Tab::Time, Tab::Conversions, Tab::Connections, Tab::Assistants, Tab::Sync, Tab::Data];
+    let names = ["General", "Time & days", "Platforms", "Connections", "AI assistants", "Sync", "Data"];
     let cur = tabs.iter().position(|t| *t == app.settings.tab).unwrap_or(0);
     let full_w = ui.available_width();
     let narrow = full_w < 720.0;
     let picked = if narrow {
-        // six names don't fit a narrow window as segments
+        // seven names don't fit a narrow window as segments
         let opts: Vec<(usize, String)> = names.iter().enumerate().map(|(i, n)| (i, tr(n))).collect();
         let mut v = cur;
         if select(ui, "settings-tab", &mut v, &opts, ui.available_width().min(320.0), false) { Some(v) } else { None }
     } else {
         // the tab bar spans the same width as the panels below it, in equal segments
         let seg_w = (full_w - super::period::SEG_PAD * 2.0) / names.len() as f32;
-        super::period::segmented_equal(ui, &names, cur, seg_w, &[true; 6]).0
+        super::period::segmented_equal(ui, &names, cur, seg_w, &[true; 7]).0
     };
     if let Some(i) = picked {
         app.settings.tab = tabs[i];
@@ -161,6 +163,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
                 Tab::Conversions => conversions(app, ui),
                 Tab::Sync => sync(app, ui),
                 Tab::Connections => connections(app, ui),
+                Tab::Assistants => super::assistants::page(app, ui),
                 Tab::Data => data(app, ui),
             }
         });

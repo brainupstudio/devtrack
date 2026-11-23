@@ -885,3 +885,14 @@ its theme (`ViewportCommand::SetTheme`), so macOS draws the dark window edge, no
 Scrolling page lists fade at their edges (`scroll_fades`): where content continues above or
 below, a 28-unit band goes from the canvas colour to transparent, growing in with the first
 pixels scrolled.
+
+## AI assistants — 24 November 2026
+
+Settings › **AI assistants**, its own tab between Connections and Sync (`assistants.rs`), in reading order:
+
+- **What assistants can read** first, before the switch that shares it: a padlock (`Glyph::Lock`) and three lines with a Medium lead — *It reads* / *It never sees* / *It goes to* — then the switch (off by default, this device only).
+- **A status line under the switch**, checking by itself in the background when the tab shows with sharing on (`devtrack mcp`: handshake, tools, one read): a dot and words, grey while checking, green when ready, red with the reason; "Check again" on the right. When Claude Desktop points to a DevTrack that was moved, an amber "!" line and **Update Claude Desktop** take its place.
+- **Connect your assistant**: a segmented switch (Claude Desktop · Claude Code · Other assistants) shows one setup at a time. Claude Desktop is connected with one click, after an inline confirmation that names the file: only the `devtrack` entry is added, the rest of the file keeps its order (serde_json `preserve_order`), and a dated copy is kept next to it; a file that isn't valid JSON is never touched. "Set it up by hand" holds the JSON.
+- **Code blocks** (`code_box`): field fill, Mono 13 breaking anywhere, the copy button in the top-right corner, turning into a tick (`Glyph::Check`) for 1.6 s; no toast.
+- **Try asking**: three example questions to copy, the second naming the project with most time in the last 30 days; the group's line points to the ready-made reports in Claude Desktop's + menu.
+

@@ -422,6 +422,8 @@ pub enum Glyph {
     Calendar,
     Convert,
     Sidebar,
+    Check,
+    Lock,
 }
 
 pub fn draw_glyph(painter: &egui::Painter, c: egui::Pos2, g: Glyph, col: Color32) {
@@ -482,6 +484,20 @@ pub fn draw_glyph(painter: &egui::Painter, c: egui::Pos2, g: Glyph, col: Color32
         Glyph::Close => {
             painter.line_segment([c + egui::vec2(-4.5, -4.5), c + egui::vec2(4.5, 4.5)], s);
             painter.line_segment([c + egui::vec2(4.5, -4.5), c + egui::vec2(-4.5, 4.5)], s);
+        }
+        Glyph::Check => {
+            painter.add(egui::Shape::line(vec![c + egui::vec2(-5.0, 0.5), c + egui::vec2(-1.5, 4.0), c + egui::vec2(5.5, -4.0)], s));
+        }
+        Glyph::Lock => {
+            // a padlock: the shackle as a half ring over the body
+            let arc: Vec<egui::Pos2> = (0..=12).map(|i| {
+                let a = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
+                c + egui::vec2(3.5 * a.cos(), -1.5 + 3.5 * a.sin())
+            }).collect();
+            painter.add(egui::Shape::line(arc, s));
+            painter.line_segment([c + egui::vec2(-3.5, -1.5), c + egui::vec2(-3.5, 0.0)], s);
+            painter.line_segment([c + egui::vec2(3.5, -1.5), c + egui::vec2(3.5, 0.0)], s);
+            painter.rect_stroke(egui::Rect::from_min_size(c + egui::vec2(-5.5, 0.0), egui::vec2(11.0, 7.5)), 1.5, s, egui::StrokeKind::Middle);
         }
     }
 }

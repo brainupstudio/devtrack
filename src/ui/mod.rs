@@ -4,6 +4,7 @@
 
 mod activities;
 mod assigned;
+mod assistants;
 mod compact;
 mod dest;
 mod gallery;
@@ -222,6 +223,8 @@ pub struct App {
     pub dest: Option<dest::DestDraft>,
     pub stats: stats::StatsState,
     pub settings: settings::SettingsState,
+    /// Settings › AI assistants: the check in flight, the assistant picked, what was copied.
+    pub assistants: assistants::AssistantsState,
     pub compact_ui: compact::CompactState,
     pub jobs: jobs::Jobs,
     /// Work items assigned to you in Azure DevOps, ready for the task field.
@@ -369,6 +372,7 @@ impl App {
             dest: None,
             stats: stats::StatsState::new(Period::containing(PeriodKind::Week, t, monday)),
             settings: settings::SettingsState::from(&store),
+            assistants: assistants::AssistantsState::default(),
             compact_ui: compact::CompactState::default(),
             jobs: jobs::Jobs::default(),
             assigned: assigned::Assigned::load(&store),
@@ -656,6 +660,14 @@ impl App {
             }
             "connections" => {
                 self.settings.tab = settings::Tab::Connections;
+                Page::Settings
+            }
+            // the AI assistants tab, turned on
+            "assistants" | "assistants-code" | "assistants-other" | "assistants-confirm" => {
+                self.settings.tab = settings::Tab::Assistants;
+                self.store.local.mcp_enabled = true;
+                self.assistants.client = Some(match name { "assistants-code" => 1, "assistants-other" => 2, _ => 0 });
+                self.assistants.confirm_link = name == "assistants-confirm";
                 Page::Settings
             }
             "sync" => {

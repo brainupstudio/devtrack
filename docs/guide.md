@@ -115,6 +115,42 @@ their number and estimate. They
 are refreshed from Azure DevOps; their details (remaining and completed work, latest updates)
 are shown read-only.
 
+## AI assistants (MCP)
+
+An assistant such as Claude can read your tracked time and turn it into answers and reports,
+for example "How many hours did I spend on Northwind last week, by project?" or "Prepare the
+weekly report for the Client portal PM". DevTrack gives it clean figures, computed exactly as
+the app shows them; the assistant writes the text around them.
+
+1. In **Settings › AI assistants**, read what an assistant can see, then turn on **Let AI
+   assistants read DevTrack**. It stays off until you do, and applies to this device only. The
+   line under the switch checks by itself that assistants can reach DevTrack.
+2. Under **Connect your assistant**, pick yours:
+   - **Claude Desktop**: **Add to Claude Desktop** adds DevTrack to Claude Desktop's
+     configuration after a confirmation, keeping a copy of the file; then restart Claude
+     Desktop. **Set it up by hand** shows the entry to add yourself.
+   - **Claude Code**: run the command shown, once, in a terminal.
+   - **Other assistants** (Codex CLI, Cursor…): the command and its arguments.
+3. **Try asking** lists questions to start with, ready to copy.
+
+If DevTrack is moved or replaced, the line under the switch says so and **Update Claude
+Desktop** points Claude Desktop to the new place.
+
+What the assistant can do:
+
+- **Read only.** It reads sessions, clients, projects, tasks, estimates and the values to enter
+  in Report Time. It can't change, add or delete anything, and never sees tokens or connection
+  details.
+- **Reports.** In Claude Desktop, the **+** menu lists three ready-made reports: *Weekly report
+  for a PM*, *Project status* and *Client summary*. Their tables are computed by DevTrack, so
+  the totals match the app.
+- **Anonymized.** Ask for an anonymized report when it goes outside the team: clients become
+  "Client A", "Client B"… and session notes are left out.
+
+What the assistant reads goes to the service that runs it (Anthropic for Claude, OpenAI for
+ChatGPT and Codex). ChatGPT itself only connects to servers on the internet, so it can't reach
+DevTrack on your computer yet.
+
 ## Sync between your devices
 
 **Settings › Sync** uses a folder you already share: iCloud Drive, OneDrive, Dropbox or a
