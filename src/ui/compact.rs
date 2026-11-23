@@ -57,7 +57,24 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     // ---- footer ----
     egui::TopBottomPanel::bottom("compact-foot").frame(egui::Frame::new().fill(c.nav).inner_margin(egui::Margin::symmetric(16, 10)).stroke(Stroke::new(1.0, c.line))).show(ctx, |ui| {
         ui.horizontal(|ui| {
-            if secondary(ui, "Settings").on_hover_text(tr("Opens Settings in the full window")).clicked() {
+            // the same Settings item as the sidebar's: amber icon and name, no frame; a fill on hover
+            let name = tr(Page::Settings.name());
+            let text_w = ui.painter().layout_no_wrap(name.clone(), sans(14.0), c.text).size().x;
+            // 12 out to the left, like the day bands: the icon sits on the content's edge
+            ui.add_space(-12.0);
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(34.0 + text_w + 12.0, 38.0), Sense::click());
+            if resp.hovered() || resp.has_focus() {
+                ui.painter().rect_filled(rect, RADIUS, c.hover);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.has_focus() {
+                ui.painter().rect_stroke(rect.expand(2.0), RADIUS + 2.0, Stroke::new(2.0, c.focus), egui::StrokeKind::Inside);
+            }
+            draw_icon(ui.painter(), rect.left_center() + egui::vec2(16.0, 0.0), Page::Settings.icon(), c.amber);
+            ui.painter().text(rect.left_center() + egui::vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, &name, sans(14.0), c.text);
+            let n = name.clone();
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, n.clone()));
+            if resp.on_hover_text(tr("Opens Settings in the full window")).clicked() {
                 app.exit_compact(ctx, Some(Page::Settings));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
