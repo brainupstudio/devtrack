@@ -1,17 +1,21 @@
-## DevTrack 0.1.8
+## DevTrack 0.1.9
 
 ### Novità
-- **Timesheet più chiaro:** sotto la griglia, "Aggiungi un progetto alla settimana" e "Riempi dalla settimana scorsa" hanno un'icona **i** che spiega cosa fanno; quella della copia dice quante celle riempirà. Aggiunto un progetto, il cursore va nella sua cella di oggi. Una riga senza ore si toglie con ×.
+- **"+ Aggiungi sessione" da ogni pagina:** in Lavoro, Rendicontazione e Statistiche il pulsante in alto apre la finestra sopra la pagina in cui sei, invece di riportarti su Oggi.
+- **Work item di Azure DevOps nelle finestre delle sessioni:** in Aggiungi sessione e Modifica sessione l'elenco delle attività mostra anche i work item assegnati a te non ancora in DevTrack; sceglierne uno lo importa e lo seleziona. Un #numero non assegnato a te si può cercare da lì.
 
 ### Correzioni
-- **Aggiornamenti:** DevTrack cerca una nuova versione ogni volta che si apre, e ogni 6 ore finché resta aperta. Prima lo faceva al massimo una volta al giorno, quindi una versione appena uscita poteva non essere vista. *Da questa versione in poi; per arrivare alla 0.1.8 usa ancora "Controlla ora" in Impostazioni › Generale.*
+- **"Trova in Azure DevOps…"** nelle finestre delle sessioni non faceva nulla: ora i work item sono nell'elenco stesso.
+- **L'elenco delle attività** in quelle finestre non copre più il campo quando è lungo.
+- **Calendario:** su un giorno libero senza sessioni (per esempio la domenica nella vista Giorno) DevTrack si chiudeva. Ora il giorno viene mostrato.
+- **Timesheet:** le intestazioni dei giorni e i totali in fondo sono allineati alle ore nelle celle.
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.8-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.8-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.8-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.9-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.9-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.9-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -30,6 +34,14 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.8
+
+### Novità
+- **Timesheet più chiaro:** sotto la griglia, "Aggiungi un progetto alla settimana" e "Riempi dalla settimana scorsa" hanno un'icona **i** che spiega cosa fanno; quella della copia dice quante celle riempirà. Aggiunto un progetto, il cursore va nella sua cella di oggi. Una riga senza ore si toglie con ×.
+
+### Correzioni
+- **Aggiornamenti:** DevTrack cerca una nuova versione ogni volta che si apre, e ogni 6 ore finché resta aperta. Prima lo faceva al massimo una volta al giorno, quindi una versione appena uscita poteva non essere vista. *Da questa versione in poi; per arrivare alla 0.1.8 usa ancora "Controlla ora" in Impostazioni › Generale.*
 
 ## DevTrack 0.1.7
 
