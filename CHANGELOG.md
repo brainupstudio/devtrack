@@ -1,14 +1,14 @@
-## DevTrack 0.1.14
+## DevTrack 0.1.15
 
 ### Correzioni
-- **Icona nel Dock su macOS 26:** l'icona è ora nel formato nativo di macOS 26. Non compare più dentro una cornice bianca quando DevTrack è chiuso ed è la stessa quando è aperto.
+- **Icona nel Dock con DevTrack aperto:** mentre l'app è aperta, il Dock mostrava una "e" al posto del logo. Ora l'icona è la stessa con l'app aperta e chiusa.
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.14-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.14-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.14-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.15-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.15-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.15-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -27,6 +27,11 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.14
+
+### Correzioni
+- **Icona nel Dock su macOS 26:** l'icona è ora nel formato nativo di macOS 26. Non compare più dentro una cornice bianca quando DevTrack è chiuso ed è la stessa quando è aperto.
 
 ## DevTrack 0.1.13
 
