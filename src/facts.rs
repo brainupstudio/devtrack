@@ -1319,8 +1319,9 @@ mod tests {
 
     #[test]
     fn quality_names_what_needs_details() {
-        let db = db();
-        let n = now();
+        // the sample adds its sessions to complete only after midday: build it at 18:00 today
+        let n = report::local_time_of(report::today(), 18 * 3600);
+        let db = build_state(n, DemoState::Incomplete, true);
         let p = period(&db, PeriodSpec::ThisWeek);
         let q = quality(&db, &p, n);
         let expected = report::entries_in(&db, &p, n).into_iter().filter(|e| report::needs_completion(e)).count();
