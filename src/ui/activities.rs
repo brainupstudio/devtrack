@@ -211,6 +211,10 @@ pub struct ActState {
     /// instead of being the open one.
     pub add_pick: bool,
     pub add_project: Option<Id>,
+    /// "Add task" was pressed with no title: the field says so.
+    pub add_attempted: bool,
+    /// Closing would lose what was typed or picked: the footer asks first.
+    pub add_confirm: bool,
     pub finder: Finder,
     pub pending_move: Option<MoveDraft>,
     /// The task whose sessions are listed under its row.
@@ -225,6 +229,8 @@ pub struct ActState {
     pub client_projects_query: String,
     pub client_edit: Option<ClientEdit>,
     pub client_attempted: bool,
+    pub client_confirm: bool,
+    pub client_focused: bool,
     /// The Tasks tab: every task, filtered by words and by open or done.
     pub all_query: String,
     pub all_show: u8,
@@ -250,6 +256,8 @@ impl ActState {
         self.add_open = true;
         self.add_devops = devops;
         self.add_pick = false;
+        self.add_attempted = false;
+        self.add_confirm = false;
         self.new_task.clear();
         self.finder.selected.clear();
     }
@@ -264,6 +272,20 @@ impl ActState {
     pub fn close_add(&mut self) {
         self.add_open = false;
         self.finder.selected.clear();
+    }
+
+    /// Opens the client dialog (new or rename) fresh: no error, focus on the name.
+    pub fn open_client_edit(&mut self, e: ClientEdit) {
+        self.client_edit = Some(e);
+        self.client_attempted = false;
+        self.client_confirm = false;
+        self.client_focused = false;
+    }
+
+    pub fn close_client_edit(&mut self) {
+        self.client_edit = None;
+        self.client_attempted = false;
+        self.client_confirm = false;
     }
 
     /// The tab's first level: nothing opened below it.
@@ -1108,129 +1130,98 @@ fn color_picker(ui: &mut egui::Ui, value: &mut String, width: f32) {
 pub fn project_modal(app: &mut App, ctx: &egui::Context) {
     let Some(mut f) = app.act.form.take() else { return };
     let dark = app.dark();
-    let c = pal(dark);
-    let w = 480.0f32.min(ctx.screen_rect().width() - 96.0);
     let mut close = false;
     let mut saved: Option<Project> = None;
-    let mut x_close = false;
-    let m = egui::Modal::new(egui::Id::new("project-form")).frame(modal_frame(&c)).backdrop_color(Color32::from_black_alpha(if dark { 160 } else { 90 })).show(ctx, |ui| {
-        ui.set_width(w);
-        x_close = modal_close(ui);
-        if let Some(mut name) = f.new_client.clone() {
-            // ---- create client subview ----
-            ui.label(RichText::new(tr("New client")).font(semibold(20.0)));
-            meta(ui, "The project draft is kept; you'll return to it with this client selected.");
-            ui.add_space(GROUP_GAP);
-            let dup = !name.trim().is_empty() && app.store.db.live_clients().iter().any(|cl| cl.name.trim().eq_ignore_ascii_case(name.trim()));
-            let err = if f.attempted && name.trim().is_empty() { Some(tr("Give the client a name")) } else { None };
-            let help = if dup { Some(tr("A client with this name already exists.")) } else { None };
-            let r = field(ui, "Client name", help.as_deref(), err.as_deref(), |ui| input(ui, &mut name, Field::new("Client name", w).invalid(err.is_some())));
-            if !f.focused {
-                r.request_focus();
-                f.focused = true;
+    if let Some(mut name) = f.new_client.clone() {
+        // ---- "Create client" inside the project dialog: the same frame, a step back to it ----
+        let dialog = FormDialog {
+            id: "project-form",
+            title: "New client",
+            context: Some(tr("The project draft is kept; you'll return to it with this client selected.")),
+            width: FORM_W,
+            primary: "Create client",
+            primary_enabled: true,
+            dirty: !name.trim().is_empty(),
+            note: None,
+            note_link: Some("‹ Back"),
+        };
+        let mut confirm = f.confirm_discard;
+        let r = form_dialog(ctx, dark, dialog, &mut confirm, |ui, w| client_name_field(app, ui, w, &mut name, f.attempted, None, &mut f.focused));
+        f.confirm_discard = confirm;
+        f.new_client = Some(name.clone());
+        if r.submit {
+            f.attempted = true;
+            if !name.trim().is_empty() {
+                let cl = Client { id: new_id(), name: name.trim().to_string(), ..Default::default() };
+                f.client_id = Some(cl.id.clone());
+                app.store.put_client(cl);
+                app.notify(trf("Client “{}” created", &[&truncate(name.trim(), 40)]));
+                f.new_client = None;
+                f.attempted = false;
             }
-            f.new_client = Some(name.clone());
-            ui.add_space(GROUP_GAP);
-            divider(ui);
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if secondary(ui, "‹ Back").clicked() {
-                    f.new_client = None;
-                    f.attempted = false;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if primary(ui, "Create client").clicked() {
-                        f.attempted = true;
-                        if !name.trim().is_empty() {
-                            let cl = Client { id: new_id(), name: name.trim().to_string(), ..Default::default() };
-                            f.client_id = Some(cl.id.clone());
-                            app.store.put_client(cl);
-                            app.notify(trf("Client “{}” created", &[&truncate(name.trim(), 40)]));
-                            f.new_client = None;
-                            f.attempted = false;
-                        }
-                    }
-                });
-            });
-            return;
+        } else if r.close || r.note_link {
+            // back to the project form, never out of the dialog
+            f.new_client = None;
+            f.attempted = false;
+            f.confirm_discard = false;
         }
-        // ---- project form ----
-        ui.label(RichText::new(tr(if f.id.is_some() { "Edit project" } else { "New project" })).font(semibold(20.0)));
-        ui.add_space(GROUP_GAP);
-        egui::ScrollArea::vertical().id_salt("project-form-body").max_height((ctx.screen_rect().height() - 220.0).max(100.0)).show(ui, |ui| {
-        ui.set_width(w);
+        app.act.form = Some(f);
+        return;
+    }
+    // ---- project form ----
+    let editing = f.id.is_some();
+    let dialog = FormDialog {
+        id: "project-form",
+        title: if editing { "Edit project" } else { "New project" },
+        context: None,
+        width: FORM_W,
+        primary: if editing { "Save" } else { "Create project" },
+        primary_enabled: true,
+        dirty: f.dirty(),
+        note: None,
+        note_link: None,
+    };
+    let mut confirm = f.confirm_discard;
+    let mut create_client: Option<String> = None;
+    let r = form_dialog(ctx, dark, dialog, &mut confirm, |ui, w| {
         let err = if f.attempted && f.name.trim().is_empty() { Some(tr("Give the project a name")) } else { None };
         let r = field(ui, "Project name", None, err.as_deref(), |ui| input(ui, &mut f.name, Field::new("Project name", w).invalid(err.is_some())));
         if !f.focused {
             r.request_focus();
             f.focused = true;
         }
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.add_space(GROUP_GAP - ROW_GAP);
         let mut cid = f.client_id.clone();
-        let create = field(ui, "Client", None, None, |ui| client_picker(ui, &app.store.db, &mut cid, w));
+        create_client = field(ui, "Client", None, None, |ui| client_picker(ui, &app.store.db, &mut cid, w));
         f.client_id = cid;
-        if let Some(n) = create {
-            f.new_client = Some(n);
-            f.focused = false;
-            f.attempted = false;
-        }
         ui.add_space(GROUP_GAP - ROW_GAP);
-        field(ui, "Colour", None, None, |ui| color_picker(ui, &mut f.color, 200.0f32.min(w)));
+        field(ui, "Colour", None, None, |ui| color_picker(ui, &mut f.color, w));
         ui.add_space(GROUP_GAP - ROW_GAP);
         checkbox(ui, &mut f.billable, tr("Billable by default"));
-        ui.add_space(GROUP_GAP);
-        });
-        divider(ui);
-        ui.add_space(12.0);
-        if f.confirm_discard {
-            ui.vertical(|ui| {
-                ui.label(tr("Discard your changes?"));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if danger(ui, "Discard").clicked() {
-                        close = true;
-                    }
-                    if secondary(ui, "Keep editing").clicked() {
-                        f.confirm_discard = false;
-                    }
-                });
-            });
-            return;
-        }
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if primary(ui, if f.id.is_some() { "Save" } else { "Create project" }).clicked() {
-                    f.attempted = true;
-                    if f.name.trim().is_empty() {
-                        f.focused = false; // focus the invalid name field
-                    } else {
-                        let mut pr = f.id.as_ref().and_then(|i| app.store.db.projects.get(i)).cloned().unwrap_or(Project { id: new_id(), ..Default::default() });
-                        pr.name = f.name.trim().to_string();
-                        pr.client_id = f.client_id.clone();
-                        pr.client = app.store.db.client(&f.client_id).map(|c| c.name.clone()).unwrap_or_default();
-                        pr.color = f.color.clone();
-                        pr.billable_default = f.billable;
-                        saved = Some(pr);
-                    }
-                }
-                if secondary(ui, "Cancel").clicked() {
-                    if f.dirty() {
-                        f.confirm_discard = true;
-                    } else {
-                        close = true;
-                    }
-                }
-            });
-        });
+        enter
     });
-    if (m.should_close() || x_close) && !close && saved.is_none() {
-        if f.new_client.is_some() {
-            f.new_client = None;
-        } else if f.dirty() {
-            f.confirm_discard = true;
+    f.confirm_discard = confirm;
+    if let Some(n) = create_client {
+        f.new_client = Some(n);
+        f.focused = false;
+        f.attempted = false;
+    }
+    if r.submit {
+        f.attempted = true;
+        if f.name.trim().is_empty() {
+            f.focused = false; // focus the invalid name field
         } else {
-            close = true;
+            let mut pr = f.id.as_ref().and_then(|i| app.store.db.projects.get(i)).cloned().unwrap_or(Project { id: new_id(), ..Default::default() });
+            pr.name = f.name.trim().to_string();
+            pr.client_id = f.client_id.clone();
+            pr.client = app.store.db.client(&f.client_id).map(|c| c.name.clone()).unwrap_or_default();
+            pr.color = f.color.clone();
+            pr.billable_default = f.billable;
+            saved = Some(pr);
         }
     }
+    close |= r.close;
     if let Some(pr) = saved {
         let new = f.id.is_none();
         let id = pr.id.clone();
@@ -1250,7 +1241,73 @@ pub fn project_modal(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// Clients tab: list with project counts, a client's projects, inline create/rename/delete.
+/// The client's name, as every client dialog asks it: focused on opening, a note when the name
+/// is already taken, an error once saving was tried without one. Returns true on Enter.
+fn client_name_field(app: &App, ui: &mut egui::Ui, w: f32, name: &mut String, attempted: bool, except: Option<&Id>, focused: &mut bool) -> bool {
+    let dup = !name.trim().is_empty() && app.store.db.live_clients().iter().any(|cl| cl.name.trim().eq_ignore_ascii_case(name.trim()) && Some(&cl.id) != except);
+    let err = if attempted && name.trim().is_empty() { Some(tr("Give the client a name")) } else { None };
+    let help = if dup { Some(tr("A client with this name already exists.")) } else { None };
+    let r = field(ui, "Client name", help.as_deref(), err.as_deref(), |ui| input(ui, name, Field::new("Client name", w).invalid(err.is_some())));
+    if !*focused {
+        r.request_focus();
+        *focused = true;
+    }
+    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// New client and Rename client: the same dialog as a project's.
+pub fn client_modal(app: &mut App, ctx: &egui::Context) {
+    let (mut name, renaming) = match app.act.client_edit.clone() {
+        Some(ClientEdit::New(n)) => (n, None),
+        Some(ClientEdit::Rename(id, n)) => (n, Some(id)),
+        _ => return,
+    };
+    let original = renaming.as_ref().and_then(|id| app.store.db.clients.get(id)).map(|c| c.name.clone());
+    let dirty = match &original { Some(o) => name != *o, None => !name.trim().is_empty() };
+    let dialog = FormDialog {
+        id: "client-form",
+        title: if renaming.is_some() { "Rename client" } else { "New client" },
+        context: if renaming.is_some() { None } else { Some(tr("A client groups projects for the same customer.")) },
+        width: FORM_W,
+        primary: if renaming.is_some() { "Save" } else { "Create client" },
+        primary_enabled: true,
+        dirty,
+        note: None,
+        note_link: None,
+    };
+    let dark = app.dark();
+    let mut confirm = app.act.client_confirm;
+    let mut focused = app.act.client_focused;
+    let attempted = app.act.client_attempted;
+    let r = form_dialog(ctx, dark, dialog, &mut confirm, |ui, w| client_name_field(app, ui, w, &mut name, attempted, renaming.as_ref(), &mut focused));
+    app.act.client_confirm = confirm;
+    app.act.client_focused = focused;
+    let mut close = r.close;
+    if r.submit {
+        app.act.client_attempted = true;
+        if !name.trim().is_empty() {
+            match &renaming {
+                Some(id) => {
+                    app.store.rename_client(id, &name);
+                    app.notify(tr("Client renamed"));
+                }
+                None => {
+                    let cl = Client { id: new_id(), name: name.trim().to_string(), ..Default::default() };
+                    app.store.put_client(cl);
+                    app.notify(trf("Client “{}” created", &[&truncate(name.trim(), 40)]));
+                }
+            }
+            close = true;
+        }
+    }
+    if close {
+        app.act.close_client_edit();
+        app.restore_focus(ctx);
+    } else {
+        app.act.client_edit = Some(match renaming { Some(id) => ClientEdit::Rename(id, name), None => ClientEdit::New(name) });
+    }
+}
+
 fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     let c = p(ui);
     if let Some(id) = app.act.client_open.clone() {
@@ -1271,8 +1328,8 @@ fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
         if available < 480.0 { ui.end_row(); }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if primary(ui, "+ New client").clicked() {
-                app.act.client_edit = Some(ClientEdit::New(String::new()));
-                app.act.client_attempted = false;
+                app.remember_focus(ui.ctx());
+                app.act.open_client_edit(ClientEdit::New(String::new()));
             }
         });
     });
@@ -1362,62 +1419,14 @@ fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
 fn client_edit_panel(app: &mut App, ui: &mut egui::Ui) {
     let c = p(ui);
     let Some(edit) = app.act.client_edit.clone() else { return };
+    if !matches!(edit, ClientEdit::ConfirmDelete(_)) { return; }
     let w = 480.0f32.min(ui.available_width());
     col(ui, w, 0.0, |ui| {
         panel(ui, |ui| {
             ui.set_width(ui.available_width());
-            let iw = ui.available_width();
             match edit {
-                ClientEdit::New(mut name) | ClientEdit::Rename(_, mut name) => {
-                    let renaming_id = match &app.act.client_edit {
-                        Some(ClientEdit::Rename(id, _)) => Some(id.clone()),
-                        _ => None,
-                    };
-                    ui.label(RichText::new(tr(if renaming_id.is_some() { "Rename client" } else { "New client" })).font(medium(16.0)));
-                    ui.add_space(ROW_GAP);
-                    let err = if app.act.client_attempted && name.trim().is_empty() { Some(tr("Give the client a name")) } else { None };
-                    let dup = !name.trim().is_empty() && app.store.db.live_clients().iter().any(|cl| cl.name.trim().eq_ignore_ascii_case(name.trim()) && Some(&cl.id) != renaming_id.as_ref());
-                    let help = if dup { Some(tr("A client with this name already exists.")) } else { None };
-                    let r = field(ui, "Client name", help.as_deref(), err.as_deref(), |ui| input(ui, &mut name, Field::new("Client name", iw).invalid(err.is_some())));
-                    let mut submit = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let mut cancel = false;
-                    ui.add_space(ROW_GAP);
-                    ui.horizontal(|ui| {
-                        if primary(ui, if renaming_id.is_some() { "Save" } else { "Create client" }).clicked() {
-                            submit = true;
-                        }
-                        if secondary(ui, "Cancel").clicked() {
-                            cancel = true;
-                        }
-                    });
-                    if cancel {
-                        app.act.client_edit = None;
-                        return;
-                    }
-                    if submit {
-                        app.act.client_attempted = true;
-                        if !name.trim().is_empty() {
-                            match &renaming_id {
-                                Some(id) => {
-                                    app.store.rename_client(id, &name);
-                                    app.notify(tr("Client renamed"));
-                                }
-                                None => {
-                                    let cl = Client { id: new_id(), name: name.trim().to_string(), ..Default::default() };
-                                    app.store.put_client(cl);
-                                    app.notify(trf("Client “{}” created", &[&truncate(name.trim(), 40)]));
-                                }
-                            }
-                            app.act.client_edit = None;
-                            app.act.client_attempted = false;
-                            return;
-                        }
-                    }
-                    app.act.client_edit = Some(match renaming_id {
-                        Some(id) => ClientEdit::Rename(id, name),
-                        None => ClientEdit::New(name),
-                    });
-                }
+                // new and rename are dialogs (client_modal)
+                ClientEdit::New(_) | ClientEdit::Rename(..) => {}
                 ClientEdit::ConfirmDelete(id) => {
                     let name = app.store.db.clients.get(&id).map(|c| c.name.clone()).unwrap_or_default();
                     let n = app.store.db.projects_of_client(&id).len();
@@ -1470,8 +1479,8 @@ fn client_detail(app: &mut App, ui: &mut egui::Ui, id: Id) {
             egui::popup_below_widget(ui, pid, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(220.0);
                 if menu_row(ui, "Rename…", false, false).clicked() {
-                    app.act.client_edit = Some(ClientEdit::Rename(cl.id.clone(), cl.name.clone()));
-                    app.act.client_attempted = false;
+                    app.remember_focus(ui.ctx());
+                    app.act.open_client_edit(ClientEdit::Rename(cl.id.clone(), cl.name.clone()));
                 }
                 if menu_row(ui, if cl.archived { "Unarchive" } else { "Archive" }, false, false).clicked() {
                     let mut x = cl.clone();
@@ -2542,105 +2551,98 @@ pub fn add_task_modal(app: &mut App, ctx: &egui::Context) {
     }
     let picked = if app.act.add_pick { app.act.add_project.clone() } else { app.act.selected.clone() };
     let target: Option<Id> = picked.filter(|id| id != NO_PROJECT && app.store.db.projects.get(id).is_some_and(|p| !p.deleted));
-    let rp = recent_projects(&app.store.db);
     let target_name = app.store.db.project(&target).map(|p| p.name.clone());
-    let dark = app.dark();
-    let c = pal(dark);
-    let screen = ctx.screen_rect();
-    let w = 820.0f32.min(screen.width() - 96.0);
-    let mut x_close = false;
-    let mut close = false;
-    let mut add_local = false;
-    let mut import_now: Option<(IntegrationConfig, Vec<String>)> = None;
-    let m = egui::Modal::new(egui::Id::new("add-task")).frame(modal_frame(&c)).backdrop_color(Color32::from_black_alpha(if dark { 160 } else { 90 })).show(ctx, |ui| {
-        ui.set_width(w);
-        x_close = modal_close(ui);
-        ui.label(RichText::new(tr("Add task")).font(semibold(20.0)));
-        if app.act.add_pick {
-            // from the Tasks tab: the project is a choice, the dialog's first one
-            ui.add_space(ROW_GAP);
-            let mut pick = Pick::None;
-            field(ui, "Project", Some("Where the task belongs. Without a project, move it to one later from the row's actions."), None, |ui| {
-                pick = project_picker(ui, "add-task-project", &app.store.db, &rp, &mut app.act.add_project, 360.0f32.min(w));
-            });
-            if let Pick::Create(name) = pick {
-                app.act.add_project = Some(app.create_project(&name));
-            }
-        } else {
-            match &target_name {
-                Some(n) => meta(ui, trf_m!("In “{}”", truncate(n, 48))),
-                None => meta(ui, "Without a project: move it to one later from the row's actions."),
-            };
+    let rp = recent_projects(&app.store.db);
+    let devops = app.act.add_devops;
+    let n = app.act.finder.selected.len();
+    let ready = n > 0 && app.act.finder.state == FinderState::Loaded;
+    let primary_label = if devops {
+        match &target_name {
+            Some(t) => trf_m!("Import {} into “{}”", n, truncate(t, 28)),
+            None => trf_m!("Import {} (no project yet)", n),
         }
-        ui.add_space(GROUP_GAP);
+    } else {
+        tr("Add task")
+    };
+    // opened inside a project the place is fixed and said under the title; from the Tasks tab
+    // it is the dialog's first field
+    let context = if app.act.add_pick { None } else {
+        Some(match &target_name {
+            Some(n) => trf_m!("In “{}”", truncate(n, 48)),
+            None => tr("Without a project: move it to one later from the row's actions."),
+        })
+    };
+    let dialog = FormDialog {
+        id: "add-task",
+        title: "Add task",
+        context,
+        // the work items are a table: that view alone is wider
+        width: if devops { 820.0 } else { FORM_W },
+        primary: &primary_label,
+        primary_enabled: if devops { ready } else { true },
+        dirty: !app.act.new_task.trim().is_empty() || n > 0,
+        note: if devops && n > 0 { Some(plural(n as i64, "{} work item selected", "{} work items selected")) } else { None },
+        note_link: if devops && n > 0 { Some("Deselect") } else { None },
+    };
+    let dark = app.dark();
+    let mut confirm = app.act.add_confirm;
+    let mut pick = Pick::None;
+    let screen_h = ctx.screen_rect().height();
+    let r = form_dialog(ctx, dark, dialog, &mut confirm, |ui, w| {
+        let mut enter = false;
+        if app.act.add_pick {
+            field(ui, "Project", Some("Where the task belongs. Without a project, move it to one later from the row's actions."), None, |ui| {
+                pick = project_picker(ui, "add-task-project", &app.store.db, &rp, &mut app.act.add_project, w);
+            });
+            ui.add_space(GROUP_GAP - ROW_GAP);
+        }
         if let Some(i) = segmented(ui, &["Local task", "From Azure DevOps"], if app.act.add_devops { 1 } else { 0 }) {
             app.act.add_devops = i == 1;
         }
         ui.add_space(GROUP_GAP);
         if app.act.add_devops {
-            // the work items list scrolls inside the dialog; the actions stay below it
-            egui::ScrollArea::vertical().id_salt("add-task-devops").max_height((screen.height() * 0.62).max(240.0)).auto_shrink([false, true]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("add-task-devops").max_height((screen_h * 0.55).max(220.0)).auto_shrink([false, true]).show(ui, |ui| {
                 ui.set_width(w);
                 finder(app, ui, target.clone());
             });
         } else {
-            let r = field(ui, "Title", Some("A task of your own, for work that has no work item."), None, |ui| {
-                input(ui, &mut app.act.new_task, Field::new("Title", w).hint("e.g. Weekly client meeting"))
+            let err = if app.act.add_attempted && app.act.new_task.trim().is_empty() { Some(tr("Give the task a title")) } else { None };
+            let r = field(ui, "Title", Some("A task of your own, for work that has no work item."), err.as_deref(), |ui| {
+                input(ui, &mut app.act.new_task, Field::new("Title", w).hint("e.g. Weekly client meeting").invalid(err.is_some()))
             });
             if !ui.memory(|mm| mm.focused().is_some()) {
                 r.request_focus();
             }
-            add_local = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         }
-        ui.add_space(GROUP_GAP);
-        divider(ui);
-        ui.add_space(GROUP_GAP - ROW_GAP);
-        row(ui, CTRL_H, |ui| {
-            ui.spacing_mut().item_spacing.x = GROUP_GAP;
-            let n = app.act.finder.selected.len();
-            if app.act.add_devops && n > 0 {
-                mixed(ui, &plural(n as i64, "{} work item selected", "{} work items selected"), 14.0, None);
-                if link_btn(ui, "Deselect").clicked() {
-                    app.act.finder.selected.clear();
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = ROW_GAP;
-                if app.act.add_devops {
-                    let label_txt = match &target_name {
-                        Some(t) => trf_m!("Import {} into “{}”", n, truncate(t, 28)),
-                        None => trf_m!("Import {} (no project yet)", n),
-                    };
-                    let ready = n > 0 && app.act.finder.state == FinderState::Loaded;
-                    if button_w(ui, Kind::Primary, &label_txt, 0.0, ready).on_hover_text(tr("Importing again updates a task; it never duplicates it.")).clicked() && ready {
-                        if let Some(cfg) = connections(app).into_iter().find(|c| Some(&c.id) == app.act.finder.cfg.as_ref()) {
-                            import_now = Some((cfg, app.act.finder.selected.iter().cloned().collect()));
-                        }
-                    }
-                } else {
-                    let ok = !app.act.new_task.trim().is_empty();
-                    if button_w(ui, Kind::Primary, "Add task", 0.0, ok).clicked() && ok {
-                        add_local = true;
-                    }
-                }
-                if secondary(ui, "Cancel").clicked() {
-                    close = true;
-                }
-            });
-        });
+        enter
     });
-    if add_local && !app.act.new_task.trim().is_empty() {
-        let t = Task { id: new_id(), project_id: target.clone(), title: app.act.new_task.trim().to_string(), status: "Open".into(), source: SOURCE_MANUAL.into(), ..Default::default() };
-        app.notify(trf_m!("Task added: {}", truncate(&t.title, 40)));
-        app.store.put_task(t);
-        close = true;
+    app.act.add_confirm = confirm;
+    if let Pick::Create(name) = pick {
+        app.act.add_project = Some(app.create_project(&name));
     }
-    if let Some((cfg, ids)) = import_now {
-        let done = import(app, &cfg, &ids, target);
-        app.notify(trf_m!("{} task(s) imported; tasks already in DevTrack keep their project", done.len()));
-        close = true;
+    if r.note_link {
+        app.act.finder.selected.clear();
     }
-    if m.should_close() || x_close || close {
+    let mut done = r.close;
+    if r.submit {
+        if app.act.add_devops {
+            if let Some(cfg) = connections(app).into_iter().find(|c| Some(&c.id) == app.act.finder.cfg.as_ref()) {
+                let ids: Vec<String> = app.act.finder.selected.iter().cloned().collect();
+                let imported = import(app, &cfg, &ids, target.clone());
+                app.notify(trf_m!("{} task(s) imported; tasks already in DevTrack keep their project", imported.len()));
+                done = true;
+            }
+        } else if app.act.new_task.trim().is_empty() {
+            app.act.add_attempted = true;
+        } else {
+            let t = Task { id: new_id(), project_id: target.clone(), title: app.act.new_task.trim().to_string(), status: "Open".into(), source: SOURCE_MANUAL.into(), ..Default::default() };
+            app.notify(trf_m!("Task added: {}", truncate(&t.title, 40)));
+            app.store.put_task(t);
+            done = true;
+        }
+    }
+    if done {
         app.act.close_add();
         app.restore_focus(ctx);
     }
@@ -2782,6 +2784,38 @@ mod navigation_tests {
         assert!(app.act.selected.is_none());
         assert_eq!(app.act.all_open.as_deref(), Some(task.id.as_str()));
         assert_eq!(app.act.all_query, task.title);
+    }
+
+    #[test]
+    fn create_dialogs_ask_before_losing_what_was_typed() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Incomplete, false)), None);
+        let esc = || vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }];
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0))), events, ..Default::default() }, |ctx| {
+                client_modal(app, ctx);
+                add_task_modal(app, ctx);
+            });
+        };
+        // untouched: Esc closes at once
+        app.act.open_client_edit(ClientEdit::New(String::new()));
+        frame(&mut app, vec![]);
+        frame(&mut app, esc());
+        assert!(app.act.client_edit.is_none());
+        // typed: Esc asks first, a second Esc closes
+        app.act.open_client_edit(ClientEdit::New("Acme".into()));
+        frame(&mut app, vec![]);
+        frame(&mut app, esc());
+        assert!(app.act.client_edit.is_some() && app.act.client_confirm);
+        frame(&mut app, esc());
+        assert!(app.act.client_edit.is_none());
+        // the task dialog behaves the same
+        app.act.open_add_choose(false, None);
+        app.act.new_task = "Write the report".into();
+        frame(&mut app, vec![]);
+        frame(&mut app, esc());
+        assert!(app.act.add_open && app.act.add_confirm);
     }
 
     #[test]

@@ -2384,3 +2384,90 @@ pub fn scroll_fades<R>(ui: &Ui, out: &egui::scroll_area::ScrollAreaOutput<R>, bg
         band(rect.bottom() - h, false, (hidden_below / h).min(1.0));
     }
 }
+
+// ---------- form dialogs (new task, project, client; edit and rename) ----------
+
+/// Width of every create or edit dialog: one column of full-width fields.
+pub const FORM_W: f32 = 560.0;
+
+/// What a form dialog's frame asks of it.
+pub struct FormDialog<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    /// One line under the title: where the new record goes ("In “Design”").
+    pub context: Option<String>,
+    pub width: f32,
+    pub primary: &'a str,
+    pub primary_enabled: bool,
+    /// Something typed that closing would lose: Cancel, Esc, ✕ and a click outside ask first.
+    pub dirty: bool,
+    /// Left side of the footer: a note and an optional link ("3 selected · Deselect", "‹ Back").
+    pub note: Option<String>,
+    pub note_link: Option<&'a str>,
+}
+
+#[derive(Default)]
+pub struct FormResult {
+    pub submit: bool,
+    pub close: bool,
+    pub note_link: bool,
+}
+
+/// The one frame for create and edit dialogs: title (and context) with ✕, the fields, a line,
+/// then Cancel and the primary action on the right. The body returns true to submit (Enter in a
+/// field). Closing with unsaved input asks "Discard your changes?" in the footer first.
+pub fn form_dialog(ctx: &egui::Context, dark: bool, d: FormDialog, confirm_discard: &mut bool, body: impl FnOnce(&mut Ui, f32) -> bool) -> FormResult {
+    let c = pal(dark);
+    let screen = ctx.screen_rect();
+    let w = d.width.min(screen.width() - 96.0);
+    let mut out = FormResult::default();
+    let mut ask_close = false;
+    let mut x_close = false;
+    let m = egui::Modal::new(egui::Id::new(d.id)).frame(super::today::modal_frame(&c)).backdrop_color(Color32::from_black_alpha(if dark { 160 } else { 90 })).show(ctx, |ui| {
+        ui.set_width(w);
+        x_close = modal_close(ui);
+        ui.label(RichText::new(tr(d.title)).font(semibold(20.0)));
+        if let Some(cx) = &d.context {
+            meta(ui, cx.clone());
+        }
+        ui.add_space(GROUP_GAP);
+        egui::ScrollArea::vertical().id_salt((d.id, "body")).max_height((screen.height() - 240.0).max(120.0)).auto_shrink([false, true]).show(ui, |ui| {
+            ui.set_width(w);
+            if body(ui, w) {
+                out.submit = true;
+            }
+        });
+        ui.add_space(GROUP_GAP);
+        divider(ui);
+        ui.add_space(GROUP_GAP - ROW_GAP);
+        row(ui, CTRL_H, |ui| {
+            ui.spacing_mut().item_spacing.x = ROW_GAP;
+            if *confirm_discard {
+                ui.label(tr("Discard your changes?"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if danger(ui, "Discard").clicked() { out.close = true; }
+                    if secondary(ui, "Keep editing").clicked() { *confirm_discard = false; }
+                });
+                return;
+            }
+            if let Some(n) = &d.note {
+                if !n.is_empty() { ui.add(egui::Label::new(mixed_job(n, 14.0, c.text, sans(14.0), mono_font(14.0)))); }
+            }
+            if let Some(l) = d.note_link {
+                if link_btn(ui, l).clicked() { out.note_link = true; }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if button_w(ui, Kind::Primary, d.primary, 0.0, d.primary_enabled).clicked() && d.primary_enabled {
+                    out.submit = true;
+                }
+                if secondary(ui, "Cancel").clicked() { ask_close = true; }
+            });
+        });
+    });
+    out.submit = out.submit && d.primary_enabled && !*confirm_discard;
+    if (m.should_close() || x_close || ask_close) && !out.close && !out.submit {
+        // asking a second time closes: the question was already put
+        if d.dirty && !*confirm_discard { *confirm_discard = true; } else { out.close = true; }
+    }
+    out
+}

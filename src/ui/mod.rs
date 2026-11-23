@@ -496,6 +496,23 @@ impl App {
                 self.act.open_root(activities::ActTab::Projects);
                 Page::Activities
             }
+            // the three create dialogs, side by side in review: one frame for all of them
+            "task-new" => {
+                let project = self.store.db.live_projects().first().map(|p| p.id.clone());
+                self.act.open_root(activities::ActTab::Tasks);
+                self.act.open_add_choose(false, project);
+                Page::Activities
+            }
+            "project-new" => {
+                self.act.open_root(activities::ActTab::Projects);
+                self.act.form = Some(activities::ProjectForm::new_for(self, None));
+                Page::Activities
+            }
+            "client-new" => {
+                self.act.open_root(activities::ActTab::Clients);
+                self.act.open_client_edit(activities::ClientEdit::New(String::new()));
+                Page::Activities
+            }
             // the Tasks tab with the most tracked task open in place: estimate, sessions
             "tasks-open" => {
                 let db = &self.store.db;
@@ -1988,6 +2005,7 @@ impl eframe::App for App {
         activities::move_modal(self, ctx);
         activities::add_task_modal(self, ctx);
         activities::project_modal(self, ctx);
+        activities::client_modal(self, ctx);
         self.leave_modal(ctx);
         self.idle_modal(ctx);
         self.toast_area(ctx);

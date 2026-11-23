@@ -1253,4 +1253,6 @@ pub static IT: &[(&str, &str)] = &[
     ("Change the search, client, project, source or estimates, or which tasks to show.", "Cambia la ricerca, il cliente, il progetto, l'origine o le stime, oppure quali attività mostrare."),
     ("Where the task belongs. Without a project, move it to one later from the row's actions.", "Dove sta l'attività. Senza progetto, spostala in uno più tardi dalle azioni della riga."),
     ("Add a task of your own or bring work items from Azure DevOps. A session's task also becomes one.", "Aggiungi un'attività tua o porta i work item da Azure DevOps. Anche l'attività di una sessione ne diventa una."),
+    ("Give the task a title", "Dai un titolo all'attività"),
+    ("A client groups projects for the same customer.", "Un cliente raggruppa i progetti dello stesso committente."),
 ];
