@@ -64,6 +64,9 @@ fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/devtrack"
 cp assets/icons/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# macOS 26 draws the icon from the compiled asset catalog (CFBundleIconName) as a native icon;
+# older systems use the .icns (CFBundleIconFile). Without it, macOS 26 puts the .icns in a frame.
+cp assets/icons/Assets.car "$APP/Contents/Resources/Assets.car"
 
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -75,6 +78,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>devtrack</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$BUILD</string>
