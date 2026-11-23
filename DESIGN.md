@@ -703,11 +703,11 @@ Supersedes the 28 px page heading and the two-line session panel in wide windows
 
 ## Logo and system icons
 
-The mark is a lowercase "d" followed by a dot. All files derive from the two 4096 px masters and live in `assets/icons/`.
+The mark is a dial: a thick outer ring, open at the lower left where a dot sits, around a thin inner ring. The name is set in a bold grotesque, its capitals centred on the mark. Both are cut from one master in the same units, `assets/icons/logo-mark.svg` and `logo-name.svg`; every other file is rendered from them and lives in `assets/icons/`.
 
-- **App icon** (`app-icon.png`, `AppIcon.icns`): white mark on a black rounded square, 824 px in a 1024 px canvas with a 185 px radius (the macOS icon grid). Set at start as the window and Dock icon; the `.icns` is for a packaged `.app`.
-- **Menu bar** (`tray-template.png`, 44 px for 22 pt at 2x): a template image, so macOS draws it dark on a light bar and light on a dark one. `tray-light.png` (black) and `tray-dark.png` (white) are the same drawing for systems without template images. The item opens a menu with "Open DevTrack" and "Quit DevTrack". It is not created in screenshot mode.
-- **In the app** (`mark.png`, the trimmed mark, white with transparency): `brand_lockup` paints the mark without a tile, tinted with the text colour: the white version on the dark theme, the black one on the light theme. The name follows in Fira Code Bold (`assets/fonts/FiraCode-Bold.ttf`), the face the mark was drawn from, at half the mark's scale and on its baseline. Sidebar: mark 24 high, name 16. Compact window: 21 and 14. Narrow sidebar: the mark alone. Fira Code is used for the name only.
+- **App icon** (`app-icon.png`, `AppIcon.icns`, `app-icon.ico`): white mark, 520 px, on a black rounded square, 824 px in a 1024 px canvas with a 185 px radius (the macOS icon grid). Set at start as the window and Dock icon; the `.icns` is for a packaged `.app`, the `.ico` for Windows.
+- **Menu bar** (`tray-template.png`, 44 px for 22 pt at 2x, the mark 36 px): a template image, so macOS draws it dark on a light bar and light on a dark one. `tray-light.png` (black) and `tray-dark.png` (white) are the same drawing for systems without template images. The item opens a menu with "Open DevTrack" and "Quit DevTrack". It is not created in screenshot mode.
+- **In the app** (`mark.png` 512 px and `name.png`, white with transparency, drawn with mipmaps): `brand_lockup` paints them without a tile, tinted with the text colour: white on the dark theme, black on the light one. The name keeps its place from the master: its capitals are 0.43 of the mark's height, 0.16 of it to the right. Sidebar: mark 28 high. Compact window: 24. Narrow sidebar: the mark alone. While a session runs the mark turns clockwise once every 2.5 seconds at an even pace: the rings are round, so only the dot and its gap travel. The window repaints 30 times a second while it turns. It stays still with Reduce motion and in review pictures.
 
 ## Window chrome and collapsible sidebar
 

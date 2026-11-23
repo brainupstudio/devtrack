@@ -104,17 +104,13 @@ pub fn p(ui: &Ui) -> Pal {
 const SEMIBOLD: &str = "geist-semibold";
 const MEDIUM: &str = "geist-medium";
 const MONO_MEDIUM: &str = "geist-mono-medium";
-const BRAND: &str = "fira-code-bold";
 /// Size of every text against the sizes written in the code (1.0 = as written). The glyphs are
 /// scaled where the fonts are installed, so one number changes the whole app; the logo keeps its
 /// size.
 pub const TEXT_SCALE: f32 = 0.95;
 
-/// Ascent of Fira Code in em (935 of 1000 units).
-const FIRA_ASCENT: f32 = 0.935;
-
-/// Geist Sans (Regular, Medium, SemiBold), Geist Mono (Regular, Medium) and Fira Code Bold
-/// (the logo's face), bundled under the SIL OFL in assets/fonts, with egui's own fonts kept as fallbacks for symbols.
+/// Geist Sans (Regular, Medium, SemiBold) and Geist Mono (Regular, Medium), bundled under the
+/// SIL OFL in assets/fonts, with egui's own fonts kept as fallbacks for symbols.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let data = |b: &'static [u8]| std::sync::Arc::new(egui::FontData::from_static(b));
@@ -123,8 +119,6 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.font_data.insert("geist-semibold".into(), data(include_bytes!("../../assets/fonts/Geist-SemiBold.ttf")));
     fonts.font_data.insert("geist-mono".into(), data(include_bytes!("../../assets/fonts/GeistMono-Regular.ttf")));
     fonts.font_data.insert("geist-mono-medium".into(), data(include_bytes!("../../assets/fonts/GeistMono-Medium.ttf")));
-    // the face of the logo, used for the name beside the mark and nowhere else
-    fonts.font_data.insert(BRAND.into(), data(include_bytes!("../../assets/fonts/FiraCode-Bold.ttf")));
     let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mono_fallback: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let with = |first: &str, rest: &[String]| {
@@ -137,13 +131,10 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), with("geist-semibold", &fallback));
     fonts.families.insert(FontFamily::Name(MEDIUM.into()), with("geist-medium", &fallback));
     fonts.families.insert(FontFamily::Name(MONO_MEDIUM.into()), with("geist-mono-medium", &mono_fallback));
-    fonts.families.insert(FontFamily::Name(BRAND.into()), with(BRAND, &mono_fallback));
-    for (name, font) in fonts.font_data.iter_mut() {
-        if name != BRAND {
-            let mut f = (**font).clone();
-            f.tweak.scale *= TEXT_SCALE;
-            *font = std::sync::Arc::new(f);
-        }
+    for font in fonts.font_data.values_mut() {
+        let mut f = (**font).clone();
+        f.tweak.scale *= TEXT_SCALE;
+        *font = std::sync::Arc::new(f);
     }
     ctx.set_fonts(fonts);
 }
@@ -153,9 +144,6 @@ pub fn semibold(size: f32) -> FontId {
 }
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(MEDIUM.into()))
-}
-pub fn brand_font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(BRAND.into()))
 }
 pub fn sans(size: f32) -> FontId {
     FontId::proportional(size)
@@ -2104,46 +2092,76 @@ mod time_input_tests {
     }
 }
 
-/// Width over height of the trimmed mark in `assets/icons/mark.png`.
-const MARK_ASPECT: f32 = 183.0 / 192.0;
+// The logo's two drawings, cut from the one master in the same units (`assets/icons/logo-mark.svg`
+// and `logo-name.svg`), so the name keeps its place beside the mark at any size.
+/// Side of the mark's square, in the master's units.
+const MARK_UNITS: f32 = 80.82;
+/// Where the name's picture starts, right of and below the mark's top-left corner, and its size.
+const NAME_AT: [f32; 2] = [141.0 - 47.85, 66.5 - 45.12];
+const NAME_UNITS: [f32; 2] = [211.5, 38.0];
+
+/// A white drawing with transparency from `assets/icons`, kept as a texture. Mipmaps keep it
+/// clean when it is drawn far smaller than the picture.
+fn logo_texture(ui: &Ui, name: &'static str, png: &'static [u8]) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(("brand-texture", name));
+    ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id)).or_else(|| {
+        let img = image::load_from_memory(png).ok()?.into_rgba8();
+        let size = [img.width() as usize, img.height() as usize];
+        let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+        let t = ui.ctx().load_texture(name, egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), options);
+        ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
+        Some(t)
+    })
+}
+
+/// Seconds the spinning mark takes for one full turn.
+const MARK_TURN_SECS: f64 = 2.5;
+
+/// The mark's turn at `secs` (Unix time), clockwise at an even pace: a full circle every
+/// `MARK_TURN_SECS`.
+fn mark_turn(secs: f64) -> f32 {
+    (secs.rem_euclid(MARK_TURN_SECS) / MARK_TURN_SECS * std::f64::consts::TAU) as f32
+}
+
+fn now_secs_f64() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
 
 /// The width `brand_lockup` takes, for placing it before it is drawn (centred in a bar).
-pub fn brand_lockup_width(ui: &Ui, mark_h: f32, name_size: f32) -> f32 {
-    let name = ui.painter().layout_no_wrap(tr("DevTrack"), brand_font(name_size), p(ui).text);
-    (mark_h * MARK_ASPECT).round() + (mark_h * 0.42).round() + name.size().x.ceil()
+pub fn brand_lockup_width(mark_h: f32, with_name: bool) -> f32 {
+    let s = mark_h / MARK_UNITS;
+    if with_name { ((NAME_AT[0] + NAME_UNITS[0]) * s).ceil() } else { mark_h }
 }
 
 /// The DevTrack mark and, beside it, the name: the logo of the app.
 ///
-/// The mark is the white drawing on dark surfaces and the black one on light surfaces: one
-/// white image with transparency, tinted with the text colour. The name is set in Fira Code
-/// Bold, the face the mark was drawn from, at half the mark's scale, and sits on the mark's
-/// baseline, so the dot of the mark closes the "d" and opens the name on one line.
-/// `name_size` None draws the mark alone (narrow sidebar). Returns the rectangle used.
-pub fn brand_lockup(ui: &mut egui::Ui, mark_h: f32, name_size: Option<f32>) -> egui::Rect {
+/// Both are white drawings with transparency, tinted with the text colour: white on the dark
+/// theme, black on the light one. The name's capitals are centred on the mark, as in the master.
+/// `with_name` false draws the mark alone (narrow sidebar). With `spin` (a session running) the
+/// mark turns once every 2.5 seconds at an even pace, so the dot travels round the outer ring.
+/// Returns the rectangle used.
+pub fn brand_lockup(ui: &mut egui::Ui, mark_h: f32, with_name: bool, spin: bool) -> egui::Rect {
     let c = p(ui);
-    let id = egui::Id::new("brand-mark-texture");
-    let texture = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id)).or_else(|| {
-        let img = image::load_from_memory(include_bytes!("../../assets/icons/mark.png")).ok()?.into_rgba8();
-        let size = [img.width() as usize, img.height() as usize];
-        let t = ui.ctx().load_texture("brand-mark", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR);
-        ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
-        Some(t)
-    });
-    let mark_w = (mark_h * MARK_ASPECT).round();
-    let name = name_size.map(|size| ui.painter().layout_no_wrap(tr("DevTrack"), brand_font(size), c.text));
-    let gap = (mark_h * 0.42).round();
-    let w = mark_w + name.as_ref().map_or(0.0, |g| gap + g.size().x.ceil());
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, mark_h), Sense::hover());
+    let s = mark_h / MARK_UNITS;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(brand_lockup_width(mark_h, with_name), mark_h), Sense::hover());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "DevTrack"));
-    if let Some(t) = texture {
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        ui.painter().image(t.id(), egui::Rect::from_min_size(rect.min, egui::vec2(mark_w, mark_h)), uv, c.text);
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    if let Some(t) = logo_texture(ui, "brand-mark", include_bytes!("../../assets/icons/mark.png")) {
+        let at = egui::Rect::from_min_size(rect.min, egui::vec2(mark_h, mark_h));
+        if spin {
+            // the rings are round, so turning the whole mark only moves the dot and its gap
+            egui::Image::new((t.id(), at.size())).tint(c.text).rotate(mark_turn(now_secs_f64()), egui::vec2(0.5, 0.5)).paint_at(ui, at);
+            // 30 frames a second keep the turn smooth (under 5° a frame); only while it is drawn
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        } else {
+            ui.painter().image(t.id(), at, uv, c.text);
+        }
     }
-    if let (Some(galley), Some(size)) = (name, name_size) {
-        // Fira Code's ascent is 0.935 em: the row's top is that far above the shared baseline
-        let top = rect.bottom() - (size * FIRA_ASCENT).round();
-        ui.painter().galley(egui::pos2(rect.left() + mark_w + gap, top), galley, c.text);
+    if with_name {
+        if let Some(t) = logo_texture(ui, "brand-name", include_bytes!("../../assets/icons/name.png")) {
+            let at = rect.min + egui::vec2(NAME_AT[0], NAME_AT[1]) * s;
+            ui.painter().image(t.id(), egui::Rect::from_min_size(at, egui::vec2(NAME_UNITS[0], NAME_UNITS[1]) * s), uv, c.text);
+        }
     }
     rect
 }
@@ -2595,5 +2613,20 @@ mod user_date_tests {
         assert_eq!(parse_user_date("31/02/2026", 2026), None, "not a real day");
         assert_eq!(parse_user_date("tomorrow", 2026), None);
         assert_eq!(parse_user_date("", 2026), None);
+    }
+}
+
+#[cfg(test)]
+mod logo_tests {
+    use super::mark_turn;
+
+    #[test]
+    fn the_mark_turns_at_an_even_pace() {
+        let tau = std::f32::consts::TAU;
+        let start = 1_800_000_000.0;
+        let turn = super::MARK_TURN_SECS;
+        assert!(mark_turn(start).abs() < 1e-4);
+        assert!((mark_turn(start + turn / 4.0) - tau / 4.0).abs() < 1e-3);
+        assert!((mark_turn(start + turn / 2.0) - tau / 2.0).abs() < 1e-3);
     }
 }

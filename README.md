@@ -122,5 +122,5 @@ systems and published; [DESIGN.md](DESIGN.md) describes the visual system.
 
 ## License
 
-[MIT](LICENSE). The interface typefaces, Geist, Geist Mono and Fira Code, are under the SIL
+[MIT](LICENSE). The interface typefaces, Geist and Geist Mono, are under the SIL
 Open Font License (`assets/fonts/OFL-LICENSE.txt`).

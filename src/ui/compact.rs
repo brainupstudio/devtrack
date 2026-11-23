@@ -48,10 +48,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             }).inner;
             // the logo in the middle of the bar, clear of the window buttons on the left and of
             // Expand on the right
-            let w = brand_lockup_width(ui, 21.0, 14.0);
-            let at = egui::Rect::from_min_size(egui::pos2(bar.center().x - w / 2.0, expand.center().y - 10.5), egui::vec2(w, 21.0));
+            let w = brand_lockup_width(LOGO_H, true);
+            let spin = app.logo_spins();
+            let at = egui::Rect::from_min_size(egui::pos2(bar.center().x - w / 2.0, expand.center().y - LOGO_H / 2.0), egui::vec2(w, LOGO_H));
             let mut logo = ui.new_child(egui::UiBuilder::new().max_rect(at).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            brand_lockup(&mut logo, 21.0, Some(14.0));
+            brand_lockup(&mut logo, LOGO_H, true, spin);
         });
     });
     // ---- footer ----
@@ -112,6 +113,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 /// Review pictures only: the history scrolled part way (`--page compact-scrolled`).
 pub(super) static SHOT_SCROLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const SHOT_SCROLL_Y: f32 = 420.0;
+
+/// Height of the logo's mark in the compact window's bar.
+const LOGO_H: f32 = 24.0;
 
 fn top(app: &mut App, ui: &mut egui::Ui) {
     let c = p(ui);

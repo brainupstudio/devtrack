@@ -1105,6 +1105,12 @@ impl App {
         }
     }
 
+    /// The logo's mark turns while a session runs, unless motion is reduced; it stays still in
+    /// review pictures, so they come out the same every time.
+    pub fn logo_spins(&self) -> bool {
+        self.store.db.running().is_some() && !self.store.db.settings.reduce_motion && self.shot.is_none()
+    }
+
     /// Clamp a window position so its size fits inside the screen (kept on screen).
     pub fn clamp_to_screen(pos: egui::Pos2, size: egui::Vec2, screen: Option<egui::Rect>) -> egui::Pos2 {
         let Some(m) = screen else { return pos };
@@ -1778,9 +1784,9 @@ impl App {
         }
         ui.horizontal(|ui| {
             // the mark stands over the column of the icons
-            let lead = if self.rail { ((ui.available_width() - 23.0) / 2.0).floor() } else { 8.0 };
+            let lead = if self.rail { ((ui.available_width() - 28.0) / 2.0).floor() } else { 8.0 };
             ui.add_space(lead);
-            let logo = brand_lockup(ui, 24.0, (!self.rail).then_some(16.0));
+            let logo = brand_lockup(ui, 28.0, !self.rail, self.logo_spins());
             if let Some(note) = self.data_note {
                 if !self.rail {
                     let right = egui::pos2(ui.max_rect().right() - 6.0, logo.bottom() - 2.0);
