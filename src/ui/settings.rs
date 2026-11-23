@@ -217,7 +217,7 @@ fn updates(app: &mut App, ui: &mut egui::Ui) {
                 });
             }
         });
-        rows.row("Check when DevTrack opens", Some("Once a day it asks GitHub for the number of the latest version; a new one is downloaded and installed when you quit DevTrack. Nothing about you or your work is sent."), 40.0, |ui| {
+        rows.row("Check when DevTrack opens", Some("Each time it opens, and every 6 hours while it stays open, it asks GitHub for the number of the latest version; a new one is downloaded and installed when you quit DevTrack. Nothing about you or your work is sent."), 40.0, |ui| {
             switch(ui, &mut auto, "Check when DevTrack opens");
         });
     });

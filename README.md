@@ -65,7 +65,8 @@ yet tried on a real PC.
 
 ## Updates
 
-Once a day DevTrack asks GitHub for the number of the latest release. On macOS, when a new
+Each time it opens, and every 6 hours while it stays open, DevTrack asks GitHub for the number
+of the latest release. On macOS, when a new
 version is out it downloads it, checks it against the published checksums and installs it when
 you quit DevTrack; **Restart to update** in the sidebar installs it at once. On Windows and
 Linux it shows the new version with a link to the download page. You can turn the check off in

@@ -172,6 +172,10 @@ pub struct UpdateState {
     pub ready: Option<String>,
     /// Why the last download or preparation failed: the download page is offered instead.
     pub install_error: Option<String>,
+    /// The check at start has been made (or skipped): later ones follow `next_check`.
+    started: bool,
+    /// When to ask again while DevTrack stays open.
+    next_check: Option<Instant>,
 }
 
 impl UpdateState {
@@ -603,6 +607,13 @@ impl App {
                 self.today.timesheet = true;
                 let monday = self.store.db.settings.week_starts_monday;
                 self.today.period = Period::containing(PeriodKind::Week, today_date(), monday);
+                // a project added to the week with no hours yet: its row shows ×
+                if name == "sheet-added" {
+                    let used: Vec<Option<Id>> = self.store.db.live_entries().map(|e| e.project_id.clone()).collect();
+                    if let Some(p) = self.store.db.live_projects().into_iter().find(|p| !p.archived && !used.contains(&Some(p.id.clone()))) {
+                        self.today.sheet_rows.push(Some(p.id.clone()));
+                    }
+                }
                 Page::Today
             }
             "conversions" => {
@@ -1612,11 +1623,13 @@ impl App {
     }
 
     fn poll_update(&mut self, ctx: &egui::Context) {
-        // once a day, at start; never for pictures or previews
-        if self.frame == 2 && self.shot.is_none() && self.store.is_persistent() {
-            let due = now_secs() * 1000 - self.store.local.update_checked_ms >= devtrack_core::update::CHECK_EVERY_MS;
-            let check = self.store.local.update_check && (due || devtrack_core::update::pretending());
-            if check {
+        // every time DevTrack opens, then every few hours while it stays open; never for
+        // pictures or previews
+        let every = Duration::from_millis(devtrack_core::update::CHECK_EVERY_MS as u64);
+        if !self.update.started && self.frame >= 2 && self.shot.is_none() && self.store.is_persistent() {
+            self.update.started = true;
+            self.update.next_check = Some(Instant::now() + every);
+            if self.store.local.update_check {
                 // the answer decides what to download: the version remembered may be older
                 self.check_update(false);
             } else if let Some(v) = self.update_available() {
@@ -1627,6 +1640,9 @@ impl App {
                     self.start_download(v);
                 }
             }
+        } else if self.update.started && self.store.local.update_check && self.update.next_check.is_some_and(|t| Instant::now() >= t) {
+            self.update.next_check = Some(Instant::now() + every);
+            self.check_update(false);
         }
         if let Some((v, rx)) = &self.update.download {
             match rx.try_recv() {

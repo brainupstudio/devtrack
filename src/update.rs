@@ -207,8 +207,9 @@ fi
 const LATEST_URL: &str = "https://github.com/brainupstudio/devtrack.site/releases/latest";
 pub const DOWNLOAD_PAGE: &str = "https://brainupstudio.github.io/devtrack.site/#download";
 
-/// Once a day is enough: releases are rare.
-pub const CHECK_EVERY_MS: i64 = 24 * 60 * 60 * 1000;
+/// While DevTrack stays open (it lives in the menu bar for days), it asks again this often. It
+/// also asks every time it opens: a release published since is seen at once.
+pub const CHECK_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
 
 /// The latest published version ("0.2.0", without the "v").
 pub fn latest() -> Result<String, String> {

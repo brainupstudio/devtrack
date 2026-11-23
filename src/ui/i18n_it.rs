@@ -689,7 +689,7 @@ pub static IT: &[(&str, &str)] = &[
     ("Download", "Scarica"),
     ("Check now", "Controlla ora"),
     ("Check when DevTrack opens", "Controlla all'apertura"),
-    ("Once a day it asks GitHub for the number of the latest version; a new one is downloaded and installed when you quit DevTrack. Nothing about you or your work is sent.", "Una volta al giorno chiede a GitHub il numero dell'ultima versione; quella nuova si scarica e si installa quando chiudi DevTrack. Non invia nulla su di te o sul tuo lavoro."),
+    ("Each time it opens, and every 6 hours while it stays open, it asks GitHub for the number of the latest version; a new one is downloaded and installed when you quit DevTrack. Nothing about you or your work is sent.", "Ogni volta che si apre, e ogni 6 ore finché resta aperto, chiede a GitHub il numero dell'ultima versione; una nuova viene scaricata e installata quando chiudi DevTrack. Non viene inviato nulla su di te o sul tuo lavoro."),
     ("DevTrack {} is ready: it installs when you quit DevTrack, or now with Restart and update. Your data stays where it is.", "DevTrack {} è pronto: si installa quando chiudi DevTrack, oppure subito con Riavvia e aggiorna. I tuoi dati restano dove sono."),
     ("Downloading DevTrack {}…", "Download di DevTrack {}…"),
     ("DevTrack {} is out, but it could not be installed on its own: download it and install it over this one.", "È uscito DevTrack {}, ma non è stato possibile installarlo da solo: scaricalo e installalo al posto di questo."),
