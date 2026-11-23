@@ -807,6 +807,11 @@ impl App {
                 }
                 Page::Today
             }
+            // the compact window's history scrolled part way, a day's band pinned (with --compact)
+            "compact-scrolled" => {
+                compact::SHOT_SCROLLED.store(true, std::sync::atomic::Ordering::Relaxed);
+                Page::Today
+            }
             // the period field's picker open: a day, a week
             "period-picker" | "period-picker-week" => {
                 self.today.timesheet = name == "period-picker-week";

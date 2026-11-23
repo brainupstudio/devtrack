@@ -91,7 +91,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     }
     // ---- history ----
     egui::CentralPanel::default().frame(egui::Frame::new().fill(c.canvas).inner_margin(egui::Margin { left: 16, right: 4, top: 0, bottom: 8 })).show(ctx, |ui| {
-        egui::ScrollArea::vertical().id_salt("compact-history").auto_shrink([false, false]).show(ui, |ui| {
+        let mut scroll = egui::ScrollArea::vertical().id_salt("compact-history").auto_shrink([false, false]);
+        if SHOT_SCROLLED.load(std::sync::atomic::Ordering::Relaxed) {
+            // review pictures: a day's band pinned at the top, the next one about to push it
+            scroll = scroll.vertical_scroll_offset(SHOT_SCROLL_Y);
+        }
+        scroll.show(ui, |ui| {
             // the scroll bar, which egui draws over the content, gets the 12 px gutter: the rows
             // end on the same 16 px margin as the controls above
             ui.set_max_width(ui.available_width() - 12.0);
@@ -103,6 +108,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     });
 }
+
+/// Review pictures only: the history scrolled part way (`--page compact-scrolled`).
+pub(super) static SHOT_SCROLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const SHOT_SCROLL_Y: f32 = 420.0;
 
 fn top(app: &mut App, ui: &mut egui::Ui) {
     let c = p(ui);
@@ -288,28 +297,16 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
         meta(ui, trf_m!("No sessions in the last {} days.", app.compact_ui.days_loaded));
     }
     let w = ui.available_width();
+    // where each day's band sits in the list, for the one that stays at the top while scrolling
+    let mut bands: Vec<(egui::Rect, NaiveDate, i64)> = Vec::new();
     for (date, mut list) in by_day.into_iter().rev() {
         list.sort_by_key(|x| std::cmp::Reverse(x.1));
-        // a day is a band, as in Today's list: the nav fill, 14 in like the rows, the weekday in
-        // full colour and the day's total on the right; it opens the group, so no line under it
+        // a day is a band, as in Today's list; it opens the group, so no line under it
         ui.add_space(16.0);
         let (slot, _) = ui.allocate_exact_size(egui::vec2(w, 32.0), Sense::hover());
-        // the band reaches 12 past the rows on each side, so its words start on the rows' edge
-        let band = slot.expand2(egui::vec2(12.0, 0.0));
-        // a step above the window's fill, clearly a band in both themes (the rows' hover is lighter)
-        let fill = Color32::from_rgb(((c.nav.r() as u16 + c.selected.r() as u16) / 2) as u8, ((c.nav.g() as u16 + c.selected.g() as u16) / 2) as u8, ((c.nav.b() as u16 + c.selected.b() as u16) / 2) as u8);
-        ui.painter().rect_filled(band, RADIUS, fill);
-        let name = if date == today() { tr("Today") } else if date == today() - CDur::days(1) { tr("Yesterday") } else { super::i18n::weekday_title(date) };
-        let gn = ui.painter().layout_no_wrap(name, medium(13.0), c.text);
-        let gd = ui.painter().layout_no_wrap(super::i18n::short_date(date), mono_font(12.0), c.text2);
-        let y = band.center().y;
-        let x0 = slot.left();
-        let wn = gn.size().x;
-        ui.painter().galley(egui::pos2(x0, y - gn.size().y / 2.0), gn, c.text);
-        ui.painter().galley(egui::pos2(x0 + wn + 8.0, y - gd.size().y / 2.0), gd, c.text2);
         let total = list.iter().map(|x| x.2 - x.1).sum::<i64>() + running_by_day.get(&date).copied().unwrap_or(0);
-        let gt = ui.painter().layout_job(mixed_job(&words(total), 13.0, c.text, medium(13.0), mono_medium(13.0)));
-        ui.painter().galley(egui::pos2(slot.right() - gt.size().x, y - gt.size().y / 2.0), gt, c.text);
+        day_band(ui, slot, date, total);
+        bands.push((slot, date, total));
         ui.add_space(2.0);
         let rows_in_day = list.len();
         for (ri, (e, a, b)) in list.iter().enumerate() {
@@ -380,6 +377,7 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
             }
         }
     }
+    sticky_band(ui, &bands);
     ui.add_space(12.0);
     if link_btn(ui, "Load earlier").on_hover_text(tr("Show seven more days")).clicked() {
         app.compact_ui.days_loaded += 7;
@@ -402,5 +400,66 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
                 }
             }
         }
+    }
+}
+
+/// A day's band: a step above the window's fill, the weekday in full colour, the date, and the
+/// day's total on the right. It reaches 12 past the rows on each side, so its words start on the
+/// rows' edge.
+fn day_band(ui: &egui::Ui, slot: egui::Rect, date: NaiveDate, total: i64) {
+    let c = p(ui);
+    let band = slot.expand2(egui::vec2(12.0, 0.0));
+    // between the nav fill and the selection: clearly a band in both themes (the rows' hover is lighter)
+    let fill = Color32::from_rgb(((c.nav.r() as u16 + c.selected.r() as u16) / 2) as u8, ((c.nav.g() as u16 + c.selected.g() as u16) / 2) as u8, ((c.nav.b() as u16 + c.selected.b() as u16) / 2) as u8);
+    ui.painter().rect_filled(band, RADIUS, fill);
+    let name = if date == today() { tr("Today") } else if date == today() - CDur::days(1) { tr("Yesterday") } else { super::i18n::weekday_title(date) };
+    let gn = ui.painter().layout_no_wrap(name, medium(13.0), c.text);
+    let gd = ui.painter().layout_no_wrap(super::i18n::short_date(date), mono_font(12.0), c.text2);
+    let y = band.center().y;
+    let x0 = slot.left();
+    let wn = gn.size().x;
+    ui.painter().galley(egui::pos2(x0, y - gn.size().y / 2.0), gn, c.text);
+    ui.painter().galley(egui::pos2(x0 + wn + 8.0, y - gd.size().y / 2.0), gd, c.text2);
+    let gt = ui.painter().layout_job(mixed_job(&words(total), 13.0, c.text, medium(13.0), mono_medium(13.0)));
+    ui.painter().galley(egui::pos2(slot.right() - gt.size().x, y - gt.size().y / 2.0), gt, c.text);
+}
+
+/// The band of the day being read stays at the top of the list until the next day's band
+/// reaches it and pushes it up and out.
+fn sticky_band(ui: &mut egui::Ui, bands: &[(egui::Rect, NaiveDate, i64)]) {
+    let top = ui.clip_rect().top();
+    let Some((i, &(slot, date, total))) = bands.iter().enumerate().filter(|(_, b)| b.0.top() < top).last() else { return };
+    let next = bands.get(i + 1).map(|b| b.0.top());
+    let at = sticky_top(top, slot.height(), next);
+    let pinned = egui::Rect::from_min_size(egui::pos2(slot.left(), at), slot.size());
+    // the window's fill behind it, so the rows scrolling under don't show at its rounded corners
+    let c = p(ui);
+    ui.painter().rect_filled(pinned.expand2(egui::vec2(12.0, 0.0)), 0.0, c.canvas);
+    day_band(ui, pinned, date, total);
+    // it covers the rows under it, clicks included
+    ui.interact(pinned, egui::Id::new("compact-sticky-band"), Sense::click());
+}
+
+/// Where the pinned band's top goes: at the list's top edge, or higher when the next band is
+/// already climbing into its place.
+fn sticky_top(top: f32, height: f32, next_top: Option<f32>) -> f32 {
+    match next_top {
+        Some(n) => top.min(n - height),
+        None => top,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sticky_top;
+
+    #[test]
+    fn the_pinned_band_waits_at_the_top_then_is_pushed_up_by_the_next() {
+        // next day still far below: stays on the edge
+        assert_eq!(sticky_top(100.0, 32.0, Some(300.0)), 100.0);
+        // next day's band 20 px under the edge: the pinned one sits right above it
+        assert_eq!(sticky_top(100.0, 32.0, Some(120.0)), 88.0);
+        // last day: nothing to push it
+        assert_eq!(sticky_top(100.0, 32.0, None), 100.0);
     }
 }
