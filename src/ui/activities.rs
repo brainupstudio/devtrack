@@ -91,9 +91,26 @@ pub struct MoveDraft {
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ActTab {
     #[default]
+    Tasks,
     Projects,
     Clients,
-    Tasks,
+}
+
+/// One step below a Work tab: a client or a project, in the order they were opened. The
+/// breadcrumb shows them and Back removes the last one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Crumb {
+    Client(Id),
+    Project(Id),
+}
+
+/// Which tasks the estimate filter keeps: any, those past their planned hours, those without.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum EstimateFilter {
+    #[default]
+    All,
+    Over,
+    Missing,
 }
 
 #[derive(Clone, PartialEq, Eq, Default, Debug)]
@@ -174,10 +191,11 @@ pub enum ClientEdit {
 #[derive(Default)]
 pub struct ActState {
     pub tab: ActTab,
-    /// The project whose tasks are open (None = the project browser).
+    /// What was opened below the tab, in order. `selected` and `client_open` mirror its last step.
+    pub(crate) trail: Vec<Crumb>,
+    /// The project whose tasks are open (None = the project browser). Read only: set through
+    /// the navigation methods.
     pub selected: Option<Id>,
-    /// Client detail from which this project was opened; None means project browser.
-    pub project_origin: Option<Id>,
     pub search: String,
     pub client_filter: ClientFilter,
     pub status_filter: StatusFilter,
@@ -189,6 +207,10 @@ pub struct ActState {
     /// The "Add task" dialog is open, on a local task or on Azure DevOps work items.
     pub add_open: bool,
     pub add_devops: bool,
+    /// The dialog was opened from the Tasks tab: the project is chosen in it (`add_project`)
+    /// instead of being the open one.
+    pub add_pick: bool,
+    pub add_project: Option<Id>,
     pub finder: Finder,
     pub pending_move: Option<MoveDraft>,
     /// The task whose sessions are listed under its row.
@@ -199,6 +221,8 @@ pub struct ActState {
     pub form: Option<ProjectForm>,
     pub client_search: String,
     pub client_open: Option<Id>,
+    /// Narrows the open client's projects by name.
+    pub client_projects_query: String,
     pub client_edit: Option<ClientEdit>,
     pub client_attempted: bool,
     /// The Tasks tab: every task, filtered by words and by open or done.
@@ -207,10 +231,16 @@ pub struct ActState {
     pub all_client: ClientFilter,
     pub all_project: ProjectFilter,
     pub all_source: SourceFilter,
+    pub all_estimate: EstimateFilter,
+    /// The task whose sessions are listed under its row on the Tasks tab (apart from the
+    /// project's, so each list keeps its own open row).
+    pub all_open: Option<Id>,
+    /// Bring the open row of the Tasks tab into view once (after opening a task from elsewhere).
+    pub reveal: bool,
+    /// The task whose every session is listed; others show the most recent ones.
+    pub all_sessions: Option<Id>,
     /// Clients tab: active, archived or all.
     pub client_status: StatusFilter,
-    /// The open project was reached from the Tasks tab: Back returns there.
-    pub from_tasks: bool,
 }
 
 impl ActState {
@@ -219,8 +249,16 @@ impl ActState {
     pub fn open_add(&mut self, devops: bool) {
         self.add_open = true;
         self.add_devops = devops;
+        self.add_pick = false;
         self.new_task.clear();
         self.finder.selected.clear();
+    }
+
+    /// Opens the "Add task" dialog with a project to choose, starting from `project`.
+    pub fn open_add_choose(&mut self, devops: bool, project: Option<Id>) {
+        self.open_add(devops);
+        self.add_pick = true;
+        self.add_project = project;
     }
 
     pub fn close_add(&mut self) {
@@ -228,64 +266,95 @@ impl ActState {
         self.finder.selected.clear();
     }
 
+    /// The tab's first level: nothing opened below it.
     pub fn open_root(&mut self, tab: ActTab) {
         self.tab = tab;
-        self.selected = None;
-        self.project_origin = None;
-        self.client_open = None;
+        self.trail.clear();
         self.client_edit = None;
-        self.from_tasks = false;
+        self.sync();
     }
 
-    pub fn open_project(&mut self, id: Id, client_origin: Option<Id>) {
-        self.tab = if client_origin.is_some() { ActTab::Clients } else { ActTab::Projects };
-        self.from_tasks = false;
-        self.project_origin = client_origin;
-        self.selected = Some(id);
+    /// Opens a project from where you are: its step follows the current ones, so Back and the
+    /// breadcrumb return the same way. A project already on the way is returned to instead.
+    pub fn open_project(&mut self, id: Id) {
+        self.push(Crumb::Project(id));
         self.task_query.clear();
         self.close_add();
     }
 
     pub fn open_client(&mut self, id: Id) {
-        self.tab = ActTab::Clients;
-        self.client_open = Some(id);
-        self.selected = None;
-        self.project_origin = None;
+        self.push(Crumb::Client(id));
         self.client_edit = None;
+        self.client_projects_query.clear();
     }
 
-    /// Return one level, retaining both browsers' search and filter state.
+    /// A project as the only step of the Projects tab (links from other sections, previews).
+    pub fn show_project(&mut self, id: Id) {
+        self.open_root(ActTab::Projects);
+        self.open_project(id);
+    }
+
+    /// A client as the only step of the Clients tab.
+    pub fn show_client(&mut self, id: Id) {
+        self.open_root(ActTab::Clients);
+        self.open_client(id);
+    }
+
+    fn push(&mut self, c: Crumb) {
+        if let Some(i) = self.trail.iter().position(|x| *x == c) {
+            self.trail.truncate(i + 1);
+        } else {
+            self.trail.push(c);
+        }
+        self.sync();
+    }
+
+    /// The steps below the tab, oldest first.
+    pub fn trail(&self) -> &[Crumb] {
+        &self.trail
+    }
+
+    /// Returns to step `i` of the trail (0 = the first one opened).
+    pub fn back_to(&mut self, i: usize) {
+        self.trail.truncate(i + 1);
+        self.close_add();
+        self.client_edit = None;
+        self.sync();
+    }
+
+    /// Return one level, retaining every list's search, filters and open row.
     pub fn back(&mut self) -> bool {
-        if self.selected.take().is_some() {
-            self.close_add();
-            if let Some(client) = self.project_origin.take() {
-                self.client_open = Some(client);
-                self.tab = ActTab::Clients;
-            } else if std::mem::take(&mut self.from_tasks) {
-                self.tab = ActTab::Tasks;
-            } else {
-                self.tab = ActTab::Projects;
-            }
-            true
-        } else if self.client_open.take().is_some() {
-            self.client_edit = None;
-            self.tab = ActTab::Clients;
-            true
-        } else { false }
+        if self.trail.pop().is_none() {
+            return false;
+        }
+        self.close_add();
+        self.client_edit = None;
+        self.sync();
+        true
+    }
+
+    fn sync(&mut self) {
+        self.selected = match self.trail.last() { Some(Crumb::Project(id)) => Some(id.clone()), _ => None };
+        self.client_open = match self.trail.last() { Some(Crumb::Client(id)) => Some(id.clone()), _ => None };
     }
 }
 
 const NO_PROJECT: &str = "__none__";
 
-/// Opens a task where its detail lives: its project's page, with the task's row open (source
-/// data for an imported task, then its sessions).
+/// Opens a task where it lives: the Tasks tab, with its row open (source data for an imported
+/// task, then its sessions) and brought into view. Filters that would hide it are cleared.
 pub fn open_task(app: &mut App, task: &Task) {
-    let project = app.store.db.project(&task.project_id).map(|p| p.id.clone()).unwrap_or(NO_PROJECT.to_string());
-    app.act.open_project(project, None);
-    app.act.task_open = Some(task.id.clone());
-    if task.done && app.act.task_show == 0 {
-        app.act.task_show = 2;
+    app.act.open_root(ActTab::Tasks);
+    app.act.all_query.clear();
+    app.act.all_client = ClientFilter::All;
+    app.act.all_project = ProjectFilter::All;
+    app.act.all_source = SourceFilter::All;
+    app.act.all_estimate = EstimateFilter::All;
+    if task.done && app.act.all_show == 0 {
+        app.act.all_show = 2;
     }
+    app.act.all_open = Some(task.id.clone());
+    app.act.reveal = true;
     if task.source == SOURCE_AZURE {
         app.act.remote = None;
         load_source_detail(app, task);
@@ -312,28 +381,24 @@ pub fn open_project_form(app: &mut App, ctx: &egui::Context, id: Option<Id>, cli
 }
 
 pub fn page(app: &mut App, ui: &mut egui::Ui) {
+    // a record opened below any tab: the trail decides which, the tab only names the way back
     if let Some(id) = app.act.selected.clone() { workspace(app, ui, id); return; }
-    if app.act.tab == ActTab::Clients {
-        if let Some(id) = app.act.client_open.clone() { client_detail(app, ui, id); return; }
-    }
+    if let Some(id) = app.act.client_open.clone() { client_detail(app, ui, id); return; }
     let n_projects = app.store.db.live_projects().len();
     let n_clients = app.store.db.live_clients().len();
     let n_tasks = app.store.db.live_tasks().filter(|t| !t.done).count();
-    page_header(ui, "Work", "Projects, clients and tasks: your own, or read from Azure DevOps.", |_| {});
+    page_header(ui, "Work", "Tasks, projects and clients: your own, or read from Azure DevOps.", |_| {});
     let projects_tab = format!("{} {}", tr("Projects"), n_projects);
     let tasks_tab = format!("{} {}", tr("Tasks"), n_tasks);
     let clients_tab = format!("{} {}", tr("Clients"), n_clients);
-    let current = match app.act.tab { ActTab::Projects => 0, ActTab::Tasks => 1, ActTab::Clients => 2 };
-    if let Some(i) = segmented(ui, &[&projects_tab, &tasks_tab, &clients_tab], current) {
-        app.act.open_root(match i { 1 => ActTab::Tasks, 2 => ActTab::Clients, _ => ActTab::Projects });
+    let current = match app.act.tab { ActTab::Tasks => 0, ActTab::Projects => 1, ActTab::Clients => 2 };
+    if let Some(i) = segmented(ui, &[&tasks_tab, &projects_tab, &clients_tab], current) {
+        app.act.open_root(match i { 1 => ActTab::Projects, 2 => ActTab::Clients, _ => ActTab::Tasks });
         app.fade_content();
     }
     ui.add_space(GROUP_GAP);
     match app.act.tab {
-        ActTab::Projects => match app.act.selected.clone() {
-            Some(id) => workspace(app, ui, id),
-            None => browser(app, ui),
-        },
+        ActTab::Projects => browser(app, ui),
         ActTab::Clients => clients_tab_ui(app, ui),
         ActTab::Tasks => tasks_tab_ui(app, ui),
     }
@@ -347,10 +412,14 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     let w = ui.available_width();
     if app.store.db.live_tasks().next().is_none() {
         let mut go = false;
-        empty_state(ui, Icon::Activities, "No tasks yet", "Tasks live in projects: open a project to add your own, or bring work items from Azure DevOps. A session's task also becomes one.", |ui| {
-            go = secondary(ui, "Go to projects").clicked();
+        empty_state(ui, Icon::Activities, "No tasks yet", "Add a task of your own or bring work items from Azure DevOps. A session's task also becomes one.", |ui| {
+            go = secondary(ui, "+ Add task").clicked();
         });
-        if go { app.act.open_root(ActTab::Projects); }
+        if go {
+            let project = recent_projects(&app.store.db).into_iter().next();
+            app.remember_focus(ui.ctx());
+            app.act.open_add_choose(false, project);
+        }
         return;
     }
     // the options: clients, then the projects of the chosen client (archived ones last)
@@ -376,29 +445,45 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     }
     let source_opts = vec![(SourceFilter::All, format!("{}: {}", tr("Source"), tr("All sources"))), (SourceFilter::Local, format!("{}: {}", tr("Source"), tr("Added in DevTrack"))), (SourceFilter::Azure, format!("{}: Azure DevOps", tr("Source")))];
     let show_opts = vec![(0u8, tr("Open tasks")), (1u8, tr("Done tasks")), (2u8, tr("All tasks"))];
-    // two rows: the words and which tasks; then where they are and where they come from
+    let estimate_opts = vec![(EstimateFilter::All, format!("{}: {}", tr("Estimates"), tr("All estimates"))), (EstimateFilter::Over, format!("{}: {}", tr("Estimates"), tr("Over the planned hours"))), (EstimateFilter::Missing, format!("{}: {}", tr("Estimates"), tr("No planned hours")))];
+    // two rows: the words, which tasks and the action; then where they are, where they come
+    // from and how their estimates stand
     let show_w = 170.0;
     let narrow = w < 560.0;
+    let add_w = (text_w(ui, &tr("+ Add task"), &sans(14.0)) + PAD_X * 2.0).max(BTN_MIN_W);
+    let mut add = false;
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(CTRL_H);
         ui.spacing_mut().item_spacing = egui::vec2(ROW_GAP, ROW_GAP);
-        input(ui, &mut app.act.all_query, Field::new("Filter tasks", if narrow { w } else { w - show_w - ROW_GAP }).hint("Task, #number, project or client"));
+        search_field(ui, &mut app.act.all_query, "Search tasks", "Looks in the task, its #number, project and client.", if narrow { w } else { w - show_w - add_w - ROW_GAP * 2.0 });
+        app.geometry.rows.push(("tasks toolbar · search".into(), last_input_rect(ui)));
         select(ui, "all-task-show", &mut app.act.all_show, &show_opts, if narrow { w } else { show_w }, false);
+        app.geometry.rows.push(("tasks toolbar · show".into(), last_trigger_rect(ui)));
+        let r = button_w(ui, Kind::Secondary, "+ Add task", if narrow { w } else { add_w }, true);
+        app.geometry.rows.push(("tasks toolbar · add".into(), r.rect));
+        add = r.clicked();
     });
+    if add {
+        // the project filtered on, otherwise the one worked on last
+        let project = match &app.act.all_project { ProjectFilter::Project(id) => Some(id.clone()), _ => recent_projects(&app.store.db).into_iter().next() };
+        app.remember_focus(ui.ctx());
+        app.act.open_add_choose(false, project);
+    }
     ui.add_space(ROW_GAP);
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(CTRL_H);
         ui.spacing_mut().item_spacing = egui::vec2(ROW_GAP, ROW_GAP);
-        // a pixel short of a third: rounding must not push the last one to a new row
-        let third = if narrow { w } else { ((w - ROW_GAP * 2.0) / 3.0).floor() - 1.0 };
-        select(ui, "all-task-client", &mut app.act.all_client, &client_opts, third, false);
-        select(ui, "all-task-project", &mut app.act.all_project, &project_opts, third, false);
+        // a pixel short of a quarter: rounding must not push the last one to a new row
+        let third = if narrow { w } else { ((w - ROW_GAP * 3.0) / 4.0).floor() - 1.0 };
+        select_searchable(ui, "all-task-client", &mut app.act.all_client, &client_opts, third);
+        select_searchable(ui, "all-task-project", &mut app.act.all_project, &project_opts, third);
         select(ui, "all-task-source", &mut app.act.all_source, &source_opts, third, false);
+        select(ui, "all-task-estimate", &mut app.act.all_estimate, &estimate_opts, third, false);
     });
     ui.add_space(GROUP_GAP - ROW_GAP);
-    let q = app.act.all_query.trim().trim_start_matches('#').to_lowercase();
+    let q = app.act.all_query.trim().to_string();
     let db = &app.store.db;
-    let (fc, fp, fs) = (app.act.all_client.clone(), app.act.all_project.clone(), app.act.all_source);
+    let (fc, fp, fs, fe) = (app.act.all_client.clone(), app.act.all_project.clone(), app.act.all_source, app.act.all_estimate);
     let scope = db.live_tasks().filter(|t| match app.act.all_show { 0 => !t.done, 1 => t.done, _ => true }).count();
     let mut rows: Vec<(Task, String, String, Option<i64>, i64)> = db
         .live_tasks()
@@ -409,7 +494,12 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
             let client_ok = match &fc { ClientFilter::All => true, ClientFilter::NoClient => client.is_none(), ClientFilter::Client(id) => client.as_ref() == Some(id) };
             let project_ok = match &fp { ProjectFilter::All => true, ProjectFilter::NoProject => pr.is_none(), ProjectFilter::Project(id) => pr.map(|p| &p.id) == Some(id) };
             let source_ok = match fs { SourceFilter::All => true, SourceFilter::Local => t.source != SOURCE_AZURE, SourceFilter::Azure => t.source == SOURCE_AZURE };
-            client_ok && project_ok && source_ok
+            let estimate_ok = match fe {
+                EstimateFilter::All => true,
+                EstimateFilter::Over => t.planned_secs().is_some_and(|est| db.task_total(&t.id, now) > est),
+                EstimateFilter::Missing => t.planned_secs().is_none(),
+            };
+            client_ok && project_ok && source_ok && estimate_ok
         })
         .map(|t| {
             let pr = db.project(&t.project_id);
@@ -424,11 +514,11 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
             let last = db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).map(|e| e.start).max();
             (t.clone(), place, color, last, db.task_total(&t.id, now))
         })
-        .filter(|(t, place, ..)| q.is_empty() || t.title.to_lowercase().contains(&q) || place.to_lowercase().contains(&q) || t.external_id.as_deref().is_some_and(|id| id.contains(&q)))
+        .filter(|(t, place, ..)| search_matches(&q, &[&t.title, place, t.external_id.as_deref().unwrap_or("")]))
         .collect();
     // most recent work first; tasks never tracked follow, by name
     rows.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.title.to_lowercase().cmp(&b.0.title.to_lowercase())));
-    let filtered = !q.is_empty() || app.act.all_client != ClientFilter::All || app.act.all_project != ProjectFilter::All || app.act.all_source != SourceFilter::All;
+    let filtered = !q.is_empty() || app.act.all_client != ClientFilter::All || app.act.all_project != ProjectFilter::All || app.act.all_source != SourceFilter::All || app.act.all_estimate != EstimateFilter::All;
     let mut clear = false;
     ui.horizontal(|ui| {
         ui.set_min_height(28.0);
@@ -445,7 +535,7 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     if rows.is_empty() {
         let title = if filtered { "No task matches these filters" } else { match app.act.all_show { 0 => "No open tasks", 1 => "No done tasks", _ => "No tasks" } };
-        empty_state(ui, Icon::Activities, title, "Change the search, client, project or source, or which tasks to show.", |ui| {
+        empty_state(ui, Icon::Activities, title, "Change the search, client, project, source or estimates, or which tasks to show.", |ui| {
             if filtered { clear = secondary(ui, "Clear filters").clicked(); }
         });
     }
@@ -454,80 +544,14 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
         app.act.all_client = ClientFilter::All;
         app.act.all_project = ProjectFilter::All;
         app.act.all_source = SourceFilter::All;
+        app.act.all_estimate = EstimateFilter::All;
     }
     if rows.is_empty() { return; }
-    let compact_rows = w < 600.0;
-    let track_w = 120.0;
-    let date_w = if compact_rows { 0.0 } else { 110.0 };
-    let start_w = BTN_MIN_W + GROUP_GAP;
-    let name_w = (w - 32.0 - date_w - track_w - start_w - GROUP_GAP * 2.0).max(80.0);
-    ui.spacing_mut().item_spacing.y = 0.0;
-    let (hr, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), Sense::hover());
-    ui.painter().rect_filled(hr, TABLE_TOP, c.nav);
-    ui.painter().with_clip_rect(hr).rect_stroke(egui::Rect::from_min_max(hr.min, egui::pos2(hr.right(), hr.bottom() + 16.0)), 10.0, Stroke::new(1.0, c.line), egui::StrokeKind::Inside);
-    let hy = hr.center().y;
-    let track_right = hr.right() - start_w - GROUP_GAP;
-    ui.painter().text(egui::pos2(hr.left() + 32.0, hy), egui::Align2::LEFT_CENTER, tr("Task"), sans(12.0), c.text2);
-    if date_w > 0.0 { ui.painter().text(egui::pos2(track_right - track_w - GROUP_GAP, hy), egui::Align2::RIGHT_CENTER, tr("Last session"), sans(12.0), c.text2); }
-    ui.painter().text(egui::pos2(track_right, hy), egui::Align2::RIGHT_CENTER, tr("Tracked"), sans(12.0), c.text2);
-    let mut open: Option<Task> = None;
-    let mut start: Option<Task> = None;
+    let tasks: Vec<Task> = rows.into_iter().map(|r| r.0).collect();
     let list = egui::ScrollArea::vertical().id_salt("all-tasks").auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        let n = rows.len();
-        for (ri, (t, place, color, last, total)) in rows.iter().enumerate() {
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 56.0), Sense::click());
-            ui.painter().rect_filled(rect, if ri + 1 == n { TABLE_BOTTOM } else { egui::CornerRadius::ZERO }, hover_mix(ui, resp.id, resp.hovered(), Color32::TRANSPARENT, c.hover));
-            if resp.has_focus() {
-                ui.painter().rect_stroke(rect.shrink(1.0), RADIUS, Stroke::new(2.0, c.focus), egui::StrokeKind::Inside);
-            }
-            let y = rect.center().y;
-            let max = |px: f32| ((px - 16.0) / 7.6).max(6.0) as usize;
-            if color.is_empty() {
-                ui.painter().circle_stroke(egui::pos2(rect.left() + 18.0, y - 10.0), 3.5, Stroke::new(1.0, c.text2));
-            } else {
-                ui.painter().circle_filled(egui::pos2(rect.left() + 18.0, y - 10.0), 4.0, hex(color));
-            }
-            let mut title = t.title.clone();
-            if let (Some(id), true) = (&t.external_id, t.source == SOURCE_AZURE) { title = format!("#{} {}", id, title); }
-            ui.painter().text(egui::pos2(rect.left() + 32.0, y - 10.0), egui::Align2::LEFT_CENTER, truncate(&title, max(name_w)), medium(14.0), if t.done { c.text2 } else { c.text });
-            let mut sub = place.clone();
-            if t.done { sub = format!("{} · {}", sub, tr("done")); }
-            ui.painter().text(egui::pos2(rect.left() + 32.0, y + 11.0), egui::Align2::LEFT_CENTER, truncate(&sub, max(name_w)), sans(12.0), c.text2);
-            if date_w > 0.0 {
-                let txt = last.map(|s| super::i18n::short_date(devtrack_core::report::local_date(s))).unwrap_or_else(|| "—".into());
-                ui.painter().text(egui::pos2(rect.right() - start_w - GROUP_GAP * 2.0 - track_w, y), egui::Align2::RIGHT_CENTER, txt, mono_font(13.0), c.text2);
-            }
-            let col = if *total == 0 { c.text2 } else { c.text };
-            let g = ui.painter().layout_job(mixed_job(&total_text(*total), 14.0, col, sans(14.0), mono_font(14.0)));
-            ui.painter().galley(egui::pos2(rect.right() - start_w - GROUP_GAP - g.size().x, y - g.size().y / 2.0), g, col);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} · {}", t.title, place)));
-            let start_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - GROUP_GAP - BTN_MIN_W / 2.0, y), egui::vec2(BTN_MIN_W, CTRL_H));
-            let started = {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(start_rect));
-                button_w(&mut child, Kind::Secondary, "Start", BTN_MIN_W, true).clicked()
-            };
-            if started {
-                start = Some(t.clone());
-            } else if resp.on_hover_text(tr("Open the task in its project")).clicked() {
-                open = Some(t.clone());
-            }
-            divider(ui);
-        }
-        table_border(ui, hr.top());
+        task_rows(app, ui, &tasks, true);
     });
     scroll_fades(ui, &list, p(ui).canvas);
-    if let Some(t) = open {
-        open_task(app, &t);
-        app.act.from_tasks = true;
-        app.fade_content();
-    }
-    if let Some(t) = start {
-        let billable = app.store.db.project(&t.project_id).map(|p| p.billable_default).unwrap_or(false);
-        app.store.start(&t.title, t.project_id.clone(), Some(t.id.clone()), billable);
-        app.notify(trf_m!("Tracking “{}”", truncate(&t.display(), 40)));
-        app.go(Page::Today);
-    }
 }
 
 fn project_matches(app: &App, p: &Project) -> bool {
@@ -542,8 +566,7 @@ fn project_matches(app: &App, p: &Project) -> bool {
         ClientFilter::NoClient => app.store.db.client(&p.client_id).is_none(),
         ClientFilter::Client(id) => p.client_id.as_ref() == Some(id),
     };
-    let q = a.search.trim().to_lowercase();
-    let text_ok = q.is_empty() || format!("{} {}", p.name, app.store.db.client_name(p)).to_lowercase().contains(&q);
+    let text_ok = search_matches(&a.search, &[&p.name, &app.store.db.client_name(p)]);
     status_ok && client_ok && text_ok
 }
 
@@ -580,11 +603,10 @@ fn browser(app: &mut App, ui: &mut egui::Ui) {
         ui.set_min_height(CTRL_H);
         // the search takes the width the filters and the action leave free
         let search_w = if one_row { available - 230.0 - 170.0 - action_w - ROW_GAP * 3.0 } else if available >= 440.0 { available - action_w - ROW_GAP } else { available };
-        let r = input(ui, &mut app.act.search, Field::new("Search projects", search_w).hint("Search projects or clients"));
+        search_field(ui, &mut app.act.search, "Search projects", "Looks in the project and its client.", search_w);
         app.geometry.rows.push(("activities toolbar · search".into(), last_input_rect(ui)));
-        r.on_hover_text(tr("Search projects or clients"));
         if one_row {
-            select(ui, "act-client-filter", &mut app.act.client_filter, &opts, 230.0, false);
+            select_searchable(ui, "act-client-filter", &mut app.act.client_filter, &opts, 230.0);
             app.geometry.rows.push(("activities toolbar · client".into(), last_trigger_rect(ui)));
             select(ui, "act-status-filter", &mut app.act.status_filter, &sopts, 170.0, false);
             app.geometry.rows.push(("activities toolbar · status".into(), last_trigger_rect(ui)));
@@ -597,7 +619,7 @@ fn browser(app: &mut App, ui: &mut egui::Ui) {
     if !one_row {
         ui.horizontal_wrapped(|ui| {
             let client_w = if available >= 440.0 { (available - ROW_GAP) * 0.58 } else { available };
-            select(ui, "act-client-filter", &mut app.act.client_filter, &opts, client_w, false);
+            select_searchable(ui, "act-client-filter", &mut app.act.client_filter, &opts, client_w);
             app.geometry.rows.push(("activities toolbar · client".into(), last_trigger_rect(ui)));
             if available < 440.0 { ui.end_row(); }
             let status_w = if available >= 440.0 { available - client_w - ROW_GAP } else { available };
@@ -754,7 +776,7 @@ fn browser(app: &mut App, ui: &mut egui::Ui) {
     });
     scroll_fades(ui, &list, p(ui).canvas);
     if let Some(id) = open {
-        app.act.open_project(id, None);
+        app.act.open_project(id);
         app.fade_content();
     }
     if let Some((k, pr)) = action {
@@ -785,7 +807,7 @@ fn empty_projects(app: &mut App, ui: &mut egui::Ui) {
         open_project_form(app, ui.ctx(), None, None);
     }
     if import {
-        app.act.selected = Some(NO_PROJECT.into());
+        app.act.open_project(NO_PROJECT.into());
         app.act.open_add(true);
     }
     if connect {
@@ -794,36 +816,50 @@ fn empty_projects(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// Detail routes carry both their origin and record identity; root tabs are only on lists.
+/// The steps' names for the breadcrumb ("Tasks without a project" for the unassigned list).
+fn crumb_name(app: &App, c: &Crumb) -> String {
+    match c {
+        Crumb::Project(id) if id == NO_PROJECT => tr("Tasks without a project"),
+        Crumb::Project(id) => app.store.db.projects.get(id).map(|p| p.name.clone()).unwrap_or_default(),
+        Crumb::Client(id) => app.store.db.client(&Some(id.clone())).map(|c| c.name.clone()).unwrap_or_default(),
+    }
+}
+
+/// One navigation row: a Back arrow named for where it goes, then the way here: the tab, each
+/// step opened since (links), and the current record. Every link returns to that level.
 fn detail_navigation(app: &mut App, ui: &mut egui::Ui, current: &str) -> bool {
-    let project = app.act.selected.is_some();
-    let origin = if project { app.act.project_origin.clone() } else { None };
-    let clients = !project || origin.is_some();
-    let tasks = project && origin.is_none() && app.act.from_tasks;
-    let back_label = if !project { "Back to clients" } else if origin.is_some() { "Back to client" } else if tasks { "Back to tasks" } else { "Back to projects" };
+    let trail: Vec<Crumb> = app.act.trail().to_vec();
+    let root_name = match app.act.tab { ActTab::Tasks => "Tasks", ActTab::Projects => "Projects", ActTab::Clients => "Clients" };
+    let back_label = match trail.len() {
+        0 | 1 => tr(match app.act.tab { ActTab::Tasks => "Back to tasks", ActTab::Projects => "Back to projects", ActTab::Clients => "Back to clients" }),
+        n => trf(match &trail[n - 2] { Crumb::Client(_) => "Back to client {}", Crumb::Project(_) => "Back to project {}" }, &[&truncate(&crumb_name(app, &trail[n - 2]), 32)]),
+    };
     let mut back = false;
     let mut root = false;
-    let mut parent = false;
-    // One navigation row: a Back arrow (named for where it goes) and the breadcrumb.
+    let mut step: Option<usize> = None;
     row_wrapped(ui, CTRL_H, |ui| {
-        let r = icon_button(ui, Glyph::Prev, back_label).on_hover_text(tr("Back to the previous view (Alt+Left)"));
+        let r = icon_button(ui, Glyph::Prev, &back_label).on_hover_text(format!("{} (Alt+←)", back_label));
         app.geometry.rows.push(("activities navigation · back".into(), r.rect));
         back = r.clicked();
         ui.add_space(4.0);
-        let r = link_btn(ui, if clients { "Clients" } else if tasks { "Tasks" } else { "Projects" });
+        let r = link_btn(ui, root_name);
         app.geometry.rows.push(("activities navigation · root".into(), r.rect));
         root = r.clicked();
-        if let Some(id) = &origin {
-            if let Some(client) = app.store.db.client(&Some(id.clone())) {
-                ui.add(egui::Label::new(RichText::new("/").size(13.0).color(p(ui).text2)).extend());
-                parent = link_btn(ui, &truncate(&client.name, 24)).on_hover_text(&client.name).clicked();
-            }
+        let sep = |ui: &mut egui::Ui| { ui.add(egui::Label::new(RichText::new("/").size(13.0).color(p(ui).text2)).extend()); };
+        for (i, c) in trail.iter().enumerate().take(trail.len().saturating_sub(1)) {
+            sep(ui);
+            let name = crumb_name(app, c);
+            let r = link_btn(ui, &truncate(&name, 24)).on_hover_text(&name);
+            app.geometry.rows.push((format!("activities navigation · step {}", i), r.rect));
+            if r.clicked() { step = Some(i); }
         }
-        ui.add(egui::Label::new(RichText::new("/").size(13.0).color(p(ui).text2)).extend());
+        sep(ui);
         ui.add(egui::Label::new(RichText::new(current).size(13.0).color(p(ui).text2)).wrap());
     });
-    if root { app.act.open_root(if clients { ActTab::Clients } else if tasks { ActTab::Tasks } else { ActTab::Projects }); }
-    else if back || parent { app.act.back(); }
-    if root || back || parent { app.fade_content(); return true; }
+    if root { let tab = app.act.tab; app.act.open_root(tab); }
+    else if let Some(i) = step { app.act.back_to(i); }
+    else if back { app.act.back(); }
+    if root || back || step.is_some() { app.fade_content(); return true; }
     ui.add_space(GROUP_GAP);
     false
 }
@@ -1203,7 +1239,7 @@ pub fn project_modal(app: &mut App, ctx: &egui::Context) {
         }
         app.notify(tr(if new { "Project created" } else { "Project saved" }));
         if new && app.act.tab == ActTab::Projects && app.page == Page::Activities {
-            app.act.open_project(id, None);
+            app.act.open_project(id);
         }
         close = true;
     }
@@ -1228,7 +1264,7 @@ fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
         let new_w = ui.painter().layout_no_wrap(tr("+ New client"), medium(14.0), p(ui).text).size().x + PAD_X * 2.0;
         let status_w = 170.0;
         let search_w = if available < 480.0 { available } else { available - new_w - status_w - ROW_GAP * 2.0 };
-        input(ui, &mut app.act.client_search, Field::new("Search clients", search_w).hint("Search clients"));
+        search_field(ui, &mut app.act.client_search, "Search clients", "Looks in the client's name.", search_w);
         if available < 480.0 { ui.end_row(); }
         let sopts: Vec<(StatusFilter, String)> = [(StatusFilter::Active, "Active"), (StatusFilter::Archived, "Archived"), (StatusFilter::All, "All")].iter().map(|(v, l)| (*v, format!("{}: {}", tr("Status"), tr(l)))).collect();
         select(ui, "client-status", &mut app.act.client_status, &sopts, if available < 480.0 { available } else { status_w }, false);
@@ -1259,7 +1295,7 @@ fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     let status = app.act.client_status;
     let in_status = |cl: &&Client| match status { StatusFilter::Active => !cl.archived, StatusFilter::Archived => cl.archived, StatusFilter::All => true };
     let scope = app.store.db.live_clients().into_iter().filter(|cl| in_status(cl)).count();
-    let list: Vec<Client> = app.store.db.live_clients().into_iter().filter(|cl| in_status(cl)).filter(|cl| q.is_empty() || cl.name.to_lowercase().contains(&q)).cloned().collect();
+    let list: Vec<Client> = app.store.db.live_clients().into_iter().filter(|cl| in_status(cl)).filter(|cl| search_matches(&q, &[&cl.name])).cloned().collect();
     let filtered = !q.is_empty() || status != StatusFilter::Active;
     let mut clear = false;
     ui.horizontal(|ui| {
@@ -1399,7 +1435,7 @@ fn client_edit_panel(app: &mut App, ui: &mut egui::Ui) {
                         if danger(ui, "Delete and unlink projects").clicked() {
                             app.store.delete_client_unlinking(&id);
                             app.act.client_edit = None;
-                            app.act.client_open = None;
+                            if app.act.client_open.as_ref() == Some(&id) { app.act.back(); }
                             if app.act.client_filter == ClientFilter::Client(id.clone()) {
                                 app.act.client_filter = ClientFilter::All;
                             }
@@ -1453,10 +1489,21 @@ fn client_detail(app: &mut App, ui: &mut egui::Ui, id: Id) {
     });
     ui.add_space(GROUP_GAP);
     client_edit_panel(app, ui);
-    let projects: Vec<Project> = app.store.db.projects_of_client(&cl.id).into_iter().cloned().collect();
+    let all_projects: Vec<Project> = app.store.db.projects_of_client(&cl.id).into_iter().cloned().collect();
+    if !all_projects.is_empty() {
+        search_field(ui, &mut app.act.client_projects_query, "Search projects", "Looks in the project's name.", ui.available_width());
+        ui.add_space(ROW_GAP);
+    }
+    let projects: Vec<Project> = all_projects.iter().filter(|p| search_matches(&app.act.client_projects_query, &[&p.name])).cloned().collect();
+    let mut clear = false;
     // the count on the left, the name of the value column on the right
     row(ui, 20.0, |ui| {
-        mixed(ui, &plural(projects.len() as i64, "{} project", "{} projects"), 12.0, Some(c.text2));
+        if projects.len() == all_projects.len() {
+            mixed(ui, &plural(projects.len() as i64, "{} project", "{} projects"), 12.0, Some(c.text2));
+        } else {
+            mixed(ui, &trf("{} of {} projects", &[&projects.len(), &all_projects.len()]), 12.0, Some(c.text2));
+            clear = link_btn(ui, "Clear filters").clicked();
+        }
         if !projects.is_empty() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(14.0 - ui.spacing().item_spacing.x);
@@ -1465,8 +1512,11 @@ fn client_detail(app: &mut App, ui: &mut egui::Ui, id: Id) {
         }
     });
     ui.add_space(4.0);
-    if projects.is_empty() {
+    if clear { app.act.client_projects_query.clear(); }
+    if all_projects.is_empty() {
         meta(ui, "No projects for this client yet. Add one, or assign an existing project from its Edit project form.");
+    } else if projects.is_empty() {
+        meta(ui, "No project of this client matches the search.");
     }
     let w = ui.available_width();
     let mut open = None;
@@ -1505,7 +1555,7 @@ fn client_detail(app: &mut App, ui: &mut egui::Ui, id: Id) {
         table_border(ui, table_top);
     }
     if let Some(pid) = open {
-        app.act.open_project(pid, Some(cl.id.clone()));
+        app.act.open_project(pid);
         app.fade_content();
     }
 }
@@ -1524,7 +1574,7 @@ fn task_toolbar(app: &mut App, ui: &mut egui::Ui) {
     let mut add = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(ROW_GAP, ROW_GAP);
-        input(ui, &mut app.act.task_query, Field::new("Filter tasks", search_w).hint("Filter by title or #number"));
+        search_field(ui, &mut app.act.task_query, "Search tasks", "Looks in the task and its #number.", search_w);
         let opts = vec![(0u8, tr("Open tasks")), (1u8, tr("Done tasks")), (2u8, tr("All tasks"))];
         select(ui, "task-show", &mut app.act.task_show, &opts, show_w, false);
         add = secondary(ui, "+ Add task").clicked();
@@ -1538,9 +1588,7 @@ fn task_toolbar(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
-    let now = now_secs();
-    let c = p(ui);
-    let mut tasks: Vec<Task> = app
+    let in_project: Vec<Task> = app
         .store
         .db
         .live_tasks()
@@ -1549,27 +1597,15 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
             None => app.store.db.project(&t.project_id).is_none(),
         })
         .filter(|t| match app.act.task_show { 0 => !t.done, 1 => t.done, _ => true })
-        .filter(|t| {
-            let q = app.act.task_query.trim().trim_start_matches('#').to_lowercase();
-            q.is_empty() || t.title.to_lowercase().contains(&q) || t.external_id.as_deref().is_some_and(|id| id.contains(&q))
-        })
         .cloned()
         .collect();
+    let mut tasks: Vec<Task> = in_project.iter().filter(|t| search_matches(&app.act.task_query, &[&t.title, t.external_id.as_deref().unwrap_or("")])).cloned().collect();
     tasks.sort_by_key(|t| (t.source.clone(), t.external_id.clone().unwrap_or_default().parse::<i64>().unwrap_or(0), t.title.to_lowercase()));
-    let mut start: Option<Task> = None;
-    let mut save: Vec<Task> = vec![];
-    let mut delete: Option<Id> = None;
-    let mut move_task: Option<Task> = None;
-    let mut copied: Option<String> = None;
-    let profiles: Vec<devtrack_core::model::TimesheetProfile> = app.store.db.live_profiles().into_iter().cloned().collect();
-    // the conversions icon sits between the total and Start, as on Today
-    let conv_w = if profiles.is_empty() { 0.0 } else { CTRL_H + ROW_GAP };
-    let mut task_table_top: Option<f32> = None;
     if tasks.is_empty() {
         let (mut add, mut clear) = (false, false);
         if !app.act.task_query.trim().is_empty() {
-            empty_state(ui, Icon::Activities, "No task matches the filter", "Change the words, or clear the filter.", |ui| {
-                clear = secondary(ui, "Clear filter").clicked();
+            empty_state(ui, Icon::Activities, "No task matches the search", "Change the words, or clear the search.", |ui| {
+                clear = secondary(ui, "Clear filters").clicked();
             });
         } else {
             let title = match app.act.task_show { 0 => "No open tasks", 1 => "No done tasks", _ => "No tasks" };
@@ -1579,7 +1615,44 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
         }
         if clear { app.act.task_query.clear(); }
         if add { app.act.open_add(false); }
-    } else {
+        return;
+    }
+    // the count, against the tasks the open/done choice keeps
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        ui.set_min_height(28.0);
+        if tasks.len() == in_project.len() {
+            mixed(ui, &plural(tasks.len() as i64, "{} task", "{} tasks"), 12.0, Some(p(ui).text2));
+        } else {
+            mixed(ui, &trf("{} of {} tasks", &[&tasks.len(), &in_project.len()]), 12.0, Some(p(ui).text2));
+            clear = link_btn(ui, "Clear filters").clicked();
+        }
+    });
+    if clear { app.act.task_query.clear(); }
+    ui.add_space(4.0);
+    task_rows(app, ui, &tasks, false);
+}
+
+/// Most recent sessions listed under an open row; the rest behind "Show all".
+const SESSIONS_SHOWN: usize = 10;
+
+/// The task rows of a list, the same on the Tasks tab (`all`: every project, so each row names
+/// its project and client) and in a project. A row opens in place: planned hours, source data
+/// and the most recent sessions. Only one row is open per list.
+fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
+    let now = now_secs();
+    let c = p(ui);
+    let open_id = if all { app.act.all_open.clone() } else { app.act.task_open.clone() };
+    let mut start: Option<Task> = None;
+    let mut save: Vec<Task> = vec![];
+    let mut delete: Option<Id> = None;
+    let mut move_task: Option<Task> = None;
+    let mut copied: Option<String> = None;
+    let profiles: Vec<devtrack_core::model::TimesheetProfile> = app.store.db.live_profiles().into_iter().cloned().collect();
+    // the conversions icon sits between the total and Start, as on Today
+    let conv_w = if profiles.is_empty() { 0.0 } else { CTRL_H + ROW_GAP };
+    let task_table_top: Option<f32>;
+    {
         // column header, like the other tables
         let w = ui.available_width();
         let (hr, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), Sense::hover());
@@ -1605,12 +1678,18 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
     let mut reload: Option<Task> = None;
     let _ = &task_table_top;
     let mut edit_entry: Option<TimeEntry> = None;
-    for t in &tasks {
+    let mut to_project: Option<Id> = None;
+    let mut to_client: Option<Id> = None;
+    let mut all_sessions: Option<Option<Id>> = None;
+    for t in tasks {
+        // on the Tasks tab a row says where the task belongs: project (with its colour) and client
+        let project = app.store.db.project(&t.project_id).cloned();
+        let client = project.as_ref().and_then(|p| p.client_id.clone()).and_then(|id| app.store.db.client(&Some(id)).cloned());
         // the task's finished sessions, newest first: the date column and the list under the row
         let mut sessions: Vec<TimeEntry> = app.store.db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).cloned().collect();
         sessions.sort_by_key(|e| std::cmp::Reverse(e.start));
-        let open = app.act.task_open.as_deref() == Some(t.id.as_str());
-        ui.horizontal_wrapped(|ui| {
+        let open = open_id.as_deref() == Some(t.id.as_str());
+        let row_resp = ui.horizontal_wrapped(|ui| {
             ui.set_min_height(56.0);
             ui.spacing_mut().item_spacing.x = ROW_GAP;
             // 16 from the table's edge, as in Report Time: the disclosure's hover never touches
@@ -1621,13 +1700,33 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
             let _ = azure;
             ui.add_enabled_ui(true, |ui| {
                 let r = icon_ghost(ui, if open { Glyph::Down } else { Glyph::Next }, if open { "Hide sessions" } else { "Show sessions" });
+                app.geometry.rows.push((format!("task toggle · {}", t.id), r.rect));
                 if r.clicked() { toggle = Some(t.id.clone()); }
             });
             col(ui, if w < 560.0 { w - CTRL_H - ROW_GAP * 4.0 } else { w - CTRL_H - ROW_GAP * 5.0 - date_w - track_w - BTN_MIN_W - CTRL_H - ROW_GAP * 4.0 - conv_w }, 48.0, |ui| {
                 ui.add_space(4.0);
-                let title = ui.add(egui::Label::new(RichText::new(&t.title).font(medium(14.0))).truncate().sense(Sense::click())).on_hover_text(if t.description.is_empty() { t.title.clone() } else { format!("{}\n\n{}", t.title, t.description) });
+                let title = ui.horizontal(|ui| {
+                    if all {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 18.0), Sense::hover());
+                        match &project {
+                            Some(pr) => { ui.painter().circle_filled(r.center(), 4.0, hex(&pr.color)); }
+                            None => { ui.painter().circle_stroke(r.center(), 3.5, Stroke::new(1.0, c.text2)); }
+                        }
+                    }
+                    let mut name = t.title.clone();
+                    if let (Some(id), true) = (&t.external_id, all && t.source == SOURCE_AZURE) { name = format!("#{} {}", id, name); }
+                    ui.add(egui::Label::new(RichText::new(name).font(medium(14.0)).color(if t.done { c.text2 } else { c.text })).truncate().sense(Sense::click())).on_hover_text(if t.description.is_empty() { t.title.clone() } else { format!("{}\n\n{}", t.title, t.description) })
+                }).inner;
                 if title.clicked() { toggle = Some(t.id.clone()); }
                 let mut sub = vec![];
+                if all {
+                    sub.push(match (&project, &client) {
+                        (Some(pr), Some(cl)) => format!("{} · {}", pr.name, cl.name),
+                        (Some(pr), None) => pr.name.clone(),
+                        _ => tr("No project"),
+                    });
+                }
                 match &t.external_id {
                     Some(id) if t.source == SOURCE_AZURE => {
                         sub.push(format!("DevOps #{}", id));
@@ -1638,6 +1737,7 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
                             sub.push(t.status.clone());
                         }
                     }
+                    _ if all => { if t.done { sub.push(tr("done")); } }
                     _ => sub.push(tr(if t.done { "Local task · done" } else { "Local task" })),
                 }
                 if t.unavailable {
@@ -1661,7 +1761,9 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
                 ui.add_space(14.0);
                 // "3 h 47 min / 8 h" when the task has an estimate; amber once it is passed
                 match t.planned_secs() {
-                    Some(est) => mixed(ui, &format!("{} / {}", if total == 0 { "0".to_string() } else { words(total) }, words(est)), 14.0, Some(if total > est { c.amber } else { c.text })).on_hover_text(tr("Tracked on this task, of its planned hours")),
+                    // past the planned hours: amber and a "!", so it does not rest on colour alone
+                    Some(est) if total > est => mixed(ui, &format!("! {} / {}", words(total), words(est)), 14.0, Some(c.amber)).on_hover_text(trf_m!("{} over the planned hours", words(total - est))),
+                    Some(est) => mixed(ui, &format!("{} / {}", if total == 0 { "0".to_string() } else { words(total) }, words(est)), 14.0, Some(c.text)).on_hover_text(tr("Tracked on this task, of its planned hours")),
                     None => mixed(ui, &total_text(total), 14.0, Some(if total > 0 { c.text } else { c.text2 })).on_hover_text(tr("Tracked on this task")),
                 };
             });
@@ -1683,6 +1785,11 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
             }
             egui::popup_below_widget(ui, pid, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(240.0);
+                if let (true, Some(pr)) = (all, &project) {
+                    if menu_row(ui, "Open project", false, false).clicked() {
+                        to_project = Some(pr.id.clone());
+                    }
+                }
                 if let Some(u) = &t.url {
                     if menu_row(ui, "Open original in Azure DevOps", false, false).clicked() {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(u));
@@ -1701,13 +1808,40 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
                     delete = Some(t.id.clone());
                 }
             });
-        });
+        }).response;
+        app.geometry.rows.push((format!("task row · {}", t.id), row_resp.rect));
+        if all && open && app.act.reveal {
+            app.act.reveal = false;
+            ui.scroll_to_rect(row_resp.rect, Some(egui::Align::Center));
+        }
         if open {
-            // every session of the task: date · time · what · duration · Edit (the same dialog as Today)
+            // the task's sessions: date · time · what · duration · Edit (the same dialog as Today)
             egui::Frame::new().fill(c.nav).corner_radius(RADIUS).inner_margin(egui::Margin { left: (CTRL_H + ROW_GAP) as i8, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let inner = ui.available_width();
+                // on the Tasks tab: where the task belongs, each a way into it
+                if all {
+                    row(ui, CTRL_H, |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        label(ui, "Project");
+                        match &project {
+                            Some(pr) => {
+                                let r = link_btn(ui, &truncate(&pr.name, 40)).on_hover_text(tr("Open the project"));
+                                app.geometry.rows.push((format!("task project · {}", t.id), r.rect));
+                                if r.clicked() { to_project = Some(pr.id.clone()); }
+                            }
+                            None => { meta(ui, "No project"); }
+                        }
+                        if let Some(cl) = &client {
+                            ui.add_space(GROUP_GAP);
+                            label(ui, "Client");
+                            if link_btn(ui, &truncate(&cl.name, 40)).on_hover_text(tr("Open the client")).clicked() {
+                                to_client = Some(cl.id.clone());
+                            }
+                        }
+                    });
+                }
                 // the task's planned hours and where the tracked time stands: typed for a local
                 // task, read from Azure DevOps (Original Estimate) for an imported one
                 let from_source = t.source != SOURCE_MANUAL;
@@ -1755,7 +1889,9 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
                         label(ui, "Sessions in DevTrack");
                     }
                 }
-                for e in &sessions {
+                let every = app.act.all_sessions.as_deref() == Some(t.id.as_str());
+                let shown = if every { sessions.len() } else { sessions.len().min(SESSIONS_SHOWN) };
+                for e in sessions.iter().take(shown) {
                     let r = row(ui, 28.0, |ui| {
                         ui.spacing_mut().item_spacing.x = GROUP_GAP;
                         ui.label(mono(super::i18n::short_date(devtrack_core::report::local_date(e.start)), 12.0).color(c.text2));
@@ -1785,6 +1921,14 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
                         edit_entry = Some(e.clone());
                     }
                 }
+                // a long history stays short: the most recent sessions, the rest on request
+                if sessions.len() > SESSIONS_SHOWN {
+                    ui.add_space(4.0);
+                    let label = if every { tr("Show fewer") } else { trf("Show all ({})", &[&sessions.len()]) };
+                    let r = link_btn(ui, &label);
+                    app.geometry.rows.push((format!("task sessions · all · {}", t.id), r.rect));
+                    if r.clicked() { all_sessions = Some(if every { None } else { Some(t.id.clone()) }); }
+                }
             });
             ui.add_space(4.0);
         }
@@ -1793,10 +1937,15 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
     if let Some(top) = task_table_top {
         table_border(ui, top);
     }
+    if let Some(v) = all_sessions {
+        app.act.all_sessions = v;
+    }
     if let Some(id) = toggle {
-        app.act.task_open = if app.act.task_open.as_ref() == Some(&id) { None } else { Some(id) };
+        let slot = if all { &mut app.act.all_open } else { &mut app.act.task_open };
+        *slot = if slot.as_ref() == Some(&id) { None } else { Some(id) };
+        let now_open = slot.clone();
         // opening an imported task reads its source detail once
-        if let Some(t) = app.act.task_open.as_ref().and_then(|id| app.store.db.tasks.get(id)).cloned() {
+        if let Some(t) = now_open.as_ref().and_then(|id| app.store.db.tasks.get(id)).cloned() {
             if t.source == SOURCE_AZURE && app.act.remote.as_ref().map(|(id, _)| id != &t.id).unwrap_or(true) {
                 reload = Some(t);
             }
@@ -1830,6 +1979,14 @@ fn task_table(app: &mut App, ui: &mut egui::Ui, project: Option<Id>) {
         app.store.start(&t.title, t.project_id.clone(), Some(t.id.clone()), billable);
         app.notify(trf_m!("Tracking “{}”", truncate(&t.display(), 40)));
         app.go(Page::Today);
+    }
+    // into the task's project or client: a step below the current list, so Back returns here
+    if let Some(id) = to_project {
+        app.act.open_project(id);
+        app.fade_content();
+    } else if let Some(id) = to_client {
+        app.act.open_client(id);
+        app.fade_content();
     }
 }
 
@@ -2269,7 +2426,7 @@ fn items_table(app: &mut App, ui: &mut egui::Ui, cfg: &IntegrationConfig, target
     }).collect();
     // the filter narrows what is listed; counts and "select all" follow what is shown
     let q = app.act.finder.filter.trim().trim_start_matches('#').to_lowercase();
-    let (items, home): (Vec<RemoteItem>, Vec<Option<String>>) = items.into_iter().zip(home).filter(|(it, _)| q.is_empty() || it.title.to_lowercase().contains(&q) || it.id.contains(&q)).unzip();
+    let (items, home): (Vec<RemoteItem>, Vec<Option<String>>) = items.into_iter().zip(home).filter(|(it, _)| search_matches(&q, &[&it.title, &it.id])).unzip();
     let filtered = !q.is_empty();
     let fresh: Vec<String> = items.iter().zip(&home).filter(|(_, h)| h.is_none()).map(|(it, _)| it.id.clone()).collect();
     // count · load more · select what is new
@@ -2383,7 +2540,9 @@ pub fn add_task_modal(app: &mut App, ctx: &egui::Context) {
     if !app.act.add_open {
         return;
     }
-    let target: Option<Id> = app.act.selected.clone().filter(|id| id != NO_PROJECT && app.store.db.projects.get(id).is_some_and(|p| !p.deleted));
+    let picked = if app.act.add_pick { app.act.add_project.clone() } else { app.act.selected.clone() };
+    let target: Option<Id> = picked.filter(|id| id != NO_PROJECT && app.store.db.projects.get(id).is_some_and(|p| !p.deleted));
+    let rp = recent_projects(&app.store.db);
     let target_name = app.store.db.project(&target).map(|p| p.name.clone());
     let dark = app.dark();
     let c = pal(dark);
@@ -2397,10 +2556,22 @@ pub fn add_task_modal(app: &mut App, ctx: &egui::Context) {
         ui.set_width(w);
         x_close = modal_close(ui);
         ui.label(RichText::new(tr("Add task")).font(semibold(20.0)));
-        match &target_name {
-            Some(n) => meta(ui, trf_m!("In “{}”", truncate(n, 48))),
-            None => meta(ui, "Without a project: move it to one later from the row's actions."),
-        };
+        if app.act.add_pick {
+            // from the Tasks tab: the project is a choice, the dialog's first one
+            ui.add_space(ROW_GAP);
+            let mut pick = Pick::None;
+            field(ui, "Project", Some("Where the task belongs. Without a project, move it to one later from the row's actions."), None, |ui| {
+                pick = project_picker(ui, "add-task-project", &app.store.db, &rp, &mut app.act.add_project, 360.0f32.min(w));
+            });
+            if let Pick::Create(name) = pick {
+                app.act.add_project = Some(app.create_project(&name));
+            }
+        } else {
+            match &target_name {
+                Some(n) => meta(ui, trf_m!("In “{}”", truncate(n, 48))),
+                None => meta(ui, "Without a project: move it to one later from the row's actions."),
+            };
+        }
         ui.add_space(GROUP_GAP);
         if let Some(i) = segmented(ui, &["Local task", "From Azure DevOps"], if app.act.add_devops { 1 } else { 0 }) {
             app.act.add_devops = i == 1;
@@ -2525,7 +2696,7 @@ mod navigation_tests {
         assert_eq!(app.act.client_open.as_deref(), Some("c-northwind"));
         click(&ctx, &mut app, "client project · p-portal");
         assert_eq!(app.act.selected.as_deref(), Some("p-portal"));
-        assert_eq!(app.act.project_origin.as_deref(), Some("c-northwind"));
+        assert_eq!(app.act.trail(), &[Crumb::Client("c-northwind".into()), Crumb::Project("p-portal".into())]);
         assert_eq!(app.act.tab, ActTab::Clients);
         click(&ctx, &mut app, "activities navigation · back");
         assert!(app.act.selected.is_none());
@@ -2541,16 +2712,91 @@ mod navigation_tests {
         state.search = "portal".into();
         state.client_filter = ClientFilter::Client("c-northwind".into());
         state.status_filter = StatusFilter::All;
-        state.open_project("p-portal".into(), None);
+        state.open_root(ActTab::Projects);
+        state.open_project("p-portal".into());
         assert!(state.back());
         assert!(state.selected.is_none());
         assert_eq!(state.search, "portal");
         assert_eq!(state.client_filter, ClientFilter::Client("c-northwind".into()));
         assert_eq!(state.status_filter, StatusFilter::All);
-        state.open_project("p-portal".into(), Some("c-northwind".into()));
+        state.open_client("c-northwind".into());
+        state.open_project("p-portal".into());
         state.open_root(ActTab::Projects);
-        assert!(state.selected.is_none() && state.client_open.is_none() && state.project_origin.is_none());
+        assert!(state.selected.is_none() && state.client_open.is_none() && state.trail().is_empty());
         assert!(!state.back());
+    }
+
+    #[test]
+    fn work_opens_on_tasks_and_the_trail_returns_the_way_it_came() {
+        let mut state = ActState::default();
+        assert_eq!(state.tab, ActTab::Tasks, "Work opens on Tasks");
+        // Tasks › project › its client › another project of that client
+        state.open_project("p-portal".into());
+        state.open_client("c-northwind".into());
+        state.open_project("p-api".into());
+        assert_eq!(state.selected.as_deref(), Some("p-api"));
+        assert!(state.back());
+        assert_eq!(state.client_open.as_deref(), Some("c-northwind"));
+        assert!(state.selected.is_none());
+        // a step already on the way is returned to, not added again
+        state.open_project("p-portal".into());
+        assert_eq!(state.trail(), &[Crumb::Project("p-portal".into())]);
+        state.open_client("c-northwind".into());
+        state.back_to(0);
+        assert_eq!(state.selected.as_deref(), Some("p-portal"));
+        assert_eq!(state.tab, ActTab::Tasks, "the tab names the way back and never changes below it");
+        assert!(state.back());
+        assert!(!state.back());
+    }
+
+    #[test]
+    fn one_search_rule_everywhere() {
+        assert!(search_matches("", &["anything"]));
+        assert!(search_matches("design lib", &["Design – Library"]));
+        assert!(search_matches("library immersiva", &["Design – Library", "Design · IMMERSIVA"]));
+        assert!(search_matches("#28885", &["Modulo C01", "28885"]));
+        assert!(!search_matches("design turismo", &["Design – Library", "Design · IMMERSIVA"]));
+    }
+
+    #[test]
+    fn a_task_row_on_the_tasks_tab_opens_in_place_and_its_project_is_one_step_below() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Incomplete, false)), None);
+        app.act.open_root(ActTab::Tasks);
+        app.act.all_show = 2;
+        let task = app.store.db.live_tasks().find(|t| app.store.db.project(&t.project_id).is_some()).cloned().expect("a demo task in a project");
+        let project = task.project_id.clone().unwrap();
+        app.act.all_query = task.title.clone();
+        draw(&ctx, &mut app, vec![]);
+        draw(&ctx, &mut app, vec![]);
+        // the row opens where it is: no project page, no other task of the project
+        click(&ctx, &mut app, &format!("task toggle · {}", task.id));
+        assert_eq!(app.act.all_open.as_deref(), Some(task.id.as_str()));
+        assert!(app.act.selected.is_none());
+        // its project: one step below the Tasks tab, and Back returns to the open row
+        click(&ctx, &mut app, &format!("task project · {}", task.id));
+        assert_eq!(app.act.selected.as_deref(), Some(project.as_str()));
+        assert_eq!(app.act.tab, ActTab::Tasks);
+        click(&ctx, &mut app, "activities navigation · back");
+        assert!(app.act.selected.is_none());
+        assert_eq!(app.act.all_open.as_deref(), Some(task.id.as_str()));
+        assert_eq!(app.act.all_query, task.title);
+    }
+
+    #[test]
+    fn opening_a_task_from_elsewhere_shows_its_row_on_the_tasks_tab() {
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Incomplete, false)), None);
+        let task = app.store.db.live_tasks().next().cloned().unwrap();
+        app.act.show_project("p-portal".into());
+        app.act.all_query = "nothing matches this".into();
+        app.act.all_estimate = EstimateFilter::Over;
+        open_task(&mut app, &task);
+        assert_eq!(app.act.tab, ActTab::Tasks);
+        assert!(app.act.selected.is_none() && app.act.trail().is_empty());
+        assert_eq!(app.act.all_open.as_deref(), Some(task.id.as_str()));
+        assert!(app.act.all_query.is_empty() && app.act.all_estimate == EstimateFilter::All);
+        assert!(app.act.reveal);
     }
 }
 

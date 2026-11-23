@@ -45,14 +45,23 @@ is an error, never a jump to the next day.
 
 ## Work
 
-Three tabs: **Projects**, **Clients** and **Tasks**.
+Three tabs: **Tasks**, **Projects** and **Clients**. Work opens on Tasks.
 
+- **Tasks**: every task with its project, client, source and tracked time. Click a row to open it
+  in place: its planned hours, its source data and its most recent sessions (**Show all** lists
+  the rest). The project and client under the title open them. When a task has planned hours,
+  the row shows "tracked / planned", with a **!** once they are passed. Filters: search, status
+  (open, done, all), client, project (including "No project"), source (added in DevTrack, or
+  read from Azure DevOps) and estimates (over the planned hours, or without any).
+  **+ Add task** asks for the project.
 - **Projects**: name, client, colour, whether new sessions are billable, and planned hours (the
-  sum of their tasks' estimates).
+  sum of their tasks' estimates). A project lists its tasks, which open in place the same way.
 - **Clients**: active and archived ones, with their projects.
-- **Tasks**: every task with its project, client, source and tracked time. Filters: search,
-  status (open, done, all), client, project (including "No project") and source (added in
-  DevTrack, or read from Azure DevOps).
+
+Every list starts with a search field that works the same way: each word must appear in the
+name or in what it belongs to (a task's #number, project and client). ⌘F / Ctrl+F puts the
+cursor in it and Esc empties it. The row above a project or a client shows the way you came;
+each step in it, and Back (Alt+←), returns there with the list as you left it.
 
 ## Report Time
 
@@ -84,7 +93,7 @@ In **Settings › Connections**, add your organisation and a personal access tok
 access to work items. The token is kept in the system keychain. DevTrack only reads: it never
 writes to Azure DevOps.
 
-In **Work**, open a project and choose **Add task › From Azure DevOps**: you find the work
+In **Work**, choose **+ Add task › From Azure DevOps** (on the Tasks tab or in a project): you find the work
 items assigned to you, or search by title or number, and import them into the project with
 their number and estimate. They
 are refreshed from Azure DevOps; their details (remaining and completed work, latest updates)
@@ -122,5 +131,7 @@ started last keeps running and the other stops where it started, and the status 
 | S | Start or stop, when you're not typing |
 | C | Continue the last session, when you're not typing |
 | ⌘B / Ctrl+B | Show or hide the sidebar |
+| ⌘F / Ctrl+F | Search the list in Work |
+| Alt+← | Back, in Work |
 | ⌘⇧M / Ctrl+Shift+M | Compact window |
 | Esc | Close a dialog |

@@ -659,7 +659,7 @@ fn connections(app: &mut App, ui: &mut egui::Ui) {
                         if primary(ui, "Return to assigned tasks").clicked() {
                             app.act.finder = super::activities::Finder { cfg: Some(cfg.id.clone()), ..Default::default() };
                             app.act.open_add(true);
-                            app.act.selected = rt.project.clone().or(app.act.selected.clone());
+                            if let Some(pid) = rt.project.clone() { app.act.show_project(pid); }
                             app.store.local.last_connection = Some(cfg.id.clone());
                             app.store.save_local();
                             app.return_to = None;

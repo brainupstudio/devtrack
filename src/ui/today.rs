@@ -2485,7 +2485,7 @@ mod session_panel_tests {
     fn sidebar_asks_before_losing_changes_and_opens_the_top_level() {
         let mut app = demo();
         let id = app.store.db.live_projects().into_iter().next().unwrap().id.clone();
-        app.act.open_project(id, None);
+        app.act.open_project(id);
         app.today.only_incomplete = true;
         app.nav_to(Page::Activities);
         assert!(app.act.selected.is_none(), "a section opens at its top level");

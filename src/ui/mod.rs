@@ -491,7 +491,20 @@ impl App {
 
     pub fn open_page(&mut self, name: &str) {
         let page = match name.to_lowercase().as_str() {
-            "activities" | "projects" => Page::Activities,
+            "activities" => Page::Activities,
+            "projects" => {
+                self.act.open_root(activities::ActTab::Projects);
+                Page::Activities
+            }
+            // the Tasks tab with the most tracked task open in place: estimate, sessions
+            "tasks-open" => {
+                let db = &self.store.db;
+                let task = db.live_tasks().max_by_key(|t| db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).count()).cloned();
+                if let Some(t) = task {
+                    activities::open_task(self, &t);
+                }
+                Page::Activities
+            }
             "assigned" | "assigned-selected" => {
                 // demo: a connection and a loaded list, two of them already imported
                 if !self.store.is_persistent() {
@@ -508,7 +521,7 @@ impl App {
                         self.act.finder.selected = ["5110", "5121", "5130"].iter().map(|s| s.to_string()).collect();
                     }
                 }
-                self.act.selected = self.store.db.live_projects().first().map(|p| p.id.clone());
+                if let Some(id) = self.store.db.live_projects().first().map(|p| p.id.clone()) { self.act.show_project(id); }
                 let picked = std::mem::take(&mut self.act.finder.selected);
                 self.act.open_add(true);
                 self.act.finder.selected = picked;
@@ -622,14 +635,14 @@ impl App {
             }
             "client-detail" => {
                 self.act.tab = activities::ActTab::Clients;
-                self.act.client_open = self.store.db.live_clients().first().map(|c| c.id.clone());
+                if let Some(id) = self.store.db.live_clients().first().map(|c| c.id.clone()) { self.act.show_client(id); }
                 Page::Activities
             }
             "client-project" => {
                 if let Some(project) = self.store.db.live_projects().into_iter().find(|p| p.client_id.is_some()) {
                     let (id, client) = (project.id.clone(), project.client_id.clone());
-                    self.act.client_open = client.clone();
-                    self.act.open_project(id, client);
+                    if let Some(client) = client { self.act.show_client(client); }
+                    self.act.open_project(id);
                 }
                 Page::Activities
             }
@@ -667,7 +680,7 @@ impl App {
                 Page::Activities
             }
             "workspace" => {
-                self.act.selected = self.store.db.live_projects().first().map(|p| p.id.clone());
+                if let Some(id) = self.store.db.live_projects().first().map(|p| p.id.clone()) { self.act.show_project(id); }
                 Page::Activities
             }
             // an imported task open, with sample source data (previews never reach the network)
@@ -680,7 +693,7 @@ impl App {
                     t.source_estimate_secs = Some(8 * 3600);
                     self.store.db.tasks.insert(t.id.clone(), t.clone());
                     let day = |back: i64| Some(now_secs() - back * 86400);
-                    self.act.selected = t.project_id.clone();
+                    if let Some(pid) = t.project_id.clone() { self.act.show_project(pid); }
                     self.act.task_open = Some(t.id.clone());
                     self.act.remote = Some((t.id.clone(), activities::RemoteState::Loaded(RemoteDetail {
                         remaining: Some(5.5), completed: Some(2.5), estimate: Some(8.0),
@@ -697,7 +710,7 @@ impl App {
             "workspace-open" => {
                 let task = self.store.db.live_entries().filter(|e| !e.is_running()).filter_map(|e| e.task_id.clone()).next();
                 if let Some(t) = task.as_ref().and_then(|id| self.store.db.tasks.get(id)).cloned() {
-                    self.act.selected = t.project_id.clone();
+                    if let Some(pid) = t.project_id.clone() { self.act.show_project(pid); }
                     self.act.task_open = Some(t.id.clone());
                 }
                 Page::Activities
@@ -793,7 +806,7 @@ impl App {
             "move" => {
                 if let Some(t) = self.store.db.live_tasks().find(|t| self.store.db.live_entries().any(|e| e.task_id.as_deref() == Some(t.id.as_str()))) {
                     let n = self.store.db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).count();
-                    self.act.selected = t.project_id.clone();
+                    if let Some(pid) = t.project_id.clone() { self.act.show_project(pid); }
                     self.act.pending_move = Some(activities::MoveDraft { task: t.id.clone(), to: None, also_sessions: false, sessions: n });
                 }
                 Page::Activities
@@ -2090,11 +2103,30 @@ mod tests {
         assert_eq!(p2, egui::pos2(0.0, 0.0));
     }
     #[test]
+    fn task_search_show_and_add_never_overlap() {
+        for width in [264.0, 344.0, 500.0, 740.0, 1140.0] {
+            let ctx = egui::Context::default();
+            install_fonts(&ctx);
+            let mut app = App::new(Store::in_memory(devtrack_core::sample::build_state(now_secs(), devtrack_core::sample::DemoState::Incomplete, true)), None);
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 1800.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| activities::page(&mut app, ui));
+            });
+            let controls: Vec<_> = app.geometry.rows.iter().filter(|(name, _)| name.starts_with("tasks toolbar")).collect();
+            assert_eq!(controls.len(), 3);
+            for (_, rect) in &controls { assert!(rect.left() >= -0.5 && rect.right() <= width + 0.5, "{width}: {rect:?}"); }
+            for (i, (_, a)) in controls.iter().enumerate() {
+                for (_, b) in &controls[i + 1..] { assert!(!a.shrink(0.5).intersects(*b), "{width}: {a:?} overlaps {b:?}"); }
+            }
+        }
+    }
+
+    #[test]
     fn project_filters_and_create_action_never_overlap() {
         for width in [264.0, 344.0, 500.0, 740.0, 1140.0] {
             let ctx = egui::Context::default();
             install_fonts(&ctx);
             let mut app = App::new(Store::in_memory(devtrack_core::sample::build_state(now_secs(), devtrack_core::sample::DemoState::Incomplete, true)), None);
+            app.act.open_root(activities::ActTab::Projects);
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 1800.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| activities::page(&mut app, ui));
             });

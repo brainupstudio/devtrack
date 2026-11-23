@@ -729,6 +729,32 @@ impl<'a> Field<'a> {
 
 /// Single-line text field with an exact outer height of 36: frame painted here, a frameless
 /// text edit placed inside with 12 units of horizontal padding and vertical centring.
+/// The search field every Work list opens with: same place, same words ("Search tasks",
+/// "Search projects", …), what it looks in on hover. ⌘F/Ctrl+F puts the cursor in it and Esc
+/// empties it.
+pub fn search_field(ui: &mut Ui, value: &mut String, name: &str, looks_in: &str, width: f32) -> egui::Response {
+    let r = input(ui, value, Field::new(name, width).hint(name));
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+        r.request_focus();
+    }
+    if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !value.is_empty() {
+        value.clear();
+        r.request_focus();
+    }
+    let keys = if cfg!(target_os = "macos") { "⌘F to search, Esc to clear" } else { "Ctrl+F to search, Esc to clear" };
+    r.on_hover_text(format!("{}\n{}", tr(looks_in), tr(keys)))
+}
+
+/// One rule for every Work search: each word typed (a leading # is ignored) must appear in one
+/// of the fields, in any case and order.
+pub fn search_matches(q: &str, fields: &[&str]) -> bool {
+    let hay: Vec<String> = fields.iter().map(|f| f.to_lowercase()).collect();
+    q.split_whitespace()
+        .map(|w| w.trim_start_matches('#').to_lowercase())
+        .filter(|w| !w.is_empty())
+        .all(|w| hay.iter().any(|h| h.contains(&w)))
+}
+
 pub fn input(ui: &mut Ui, value: &mut String, f: Field) -> egui::Response {
     let c = p(ui);
     let w = if f.width <= 0.0 { ui.available_width() } else { f.width };
@@ -914,6 +940,16 @@ pub fn select_trigger(ui: &mut Ui, text: &str, placeholder: bool, width: f32, en
 
 /// A simple selector over fixed options using the shared trigger. Returns true when changed.
 pub fn select<T: PartialEq + Clone>(ui: &mut Ui, id_salt: impl std::hash::Hash, value: &mut T, options: &[(T, String)], width: f32, is_mono: bool) -> bool {
+    select_impl(ui, id_salt, value, options, width, is_mono, false)
+}
+
+/// A select whose menu always opens with a search field: lists of clients or projects, which
+/// grow over time.
+pub fn select_searchable<T: PartialEq + Clone>(ui: &mut Ui, id_salt: impl std::hash::Hash, value: &mut T, options: &[(T, String)], width: f32) -> bool {
+    select_impl(ui, id_salt, value, options, width, false, true)
+}
+
+fn select_impl<T: PartialEq + Clone>(ui: &mut Ui, id_salt: impl std::hash::Hash, value: &mut T, options: &[(T, String)], width: f32, is_mono: bool, always_search: bool) -> bool {
     let c = p(ui);
     let current = options.iter().find(|(v, _)| v == value).map(|(_, l)| l.clone()).unwrap_or_default();
     let resp = select_trigger(ui, &current, false, width, true, false, is_mono);
@@ -932,7 +968,7 @@ pub fn select<T: PartialEq + Clone>(ui: &mut Ui, id_salt: impl std::hash::Hash, 
     let pop_w = widest.clamp(width, width.max(440.0));
     let (side, room) = menu_side(ui, resp.rect);
     let room = room.max(MENU_ROW_H * 3.0);
-    let searchable = options.len() >= 10;
+    let searchable = always_search || options.len() >= 10;
     let list_h = (MENU_ROW_H * 8.0).min(room - if searchable { CTRL_H + 12.0 } else { 0.0 }).max(MENU_ROW_H * 2.0);
     egui::popup_above_or_below_widget(ui, pid, &resp, side, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_min_width(pop_w);
