@@ -1,19 +1,14 @@
-## DevTrack 0.1.13
-
-### Novità
-- **Nuovo logo:** un quadrante con due anelli e un pallino, accanto al nome DevTrack. Cambiano anche l'icona dell'app e quella nella barra dei menu.
-- **Logo in movimento:** mentre una sessione è in corso, il pallino gira intorno all'anello. Con "Riduci movimento" attivo il logo resta fermo.
+## DevTrack 0.1.14
 
 ### Correzioni
-- **Suggerimenti della descrizione:** i nomi lunghi di attività, progetti e work item di Azure DevOps non escono più dall'elenco, ma finiscono con "…".
-- **Finestra compatta:** scorrendo, le sessioni arrivano fino alla linea in fondo, senza più una fascia vuota dove il testo veniva tagliato.
+- **Icona nel Dock su macOS 26:** l'icona è ora nel formato nativo di macOS 26. Non compare più dentro una cornice bianca quando DevTrack è chiuso ed è la stessa quando è aperto.
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.13-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.13-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.13-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.14-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.14-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.14-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -32,6 +27,16 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.13
+
+### Novità
+- **Nuovo logo:** un quadrante con due anelli e un pallino, accanto al nome DevTrack. Cambiano anche l'icona dell'app e quella nella barra dei menu.
+- **Logo in movimento:** mentre una sessione è in corso, il pallino gira intorno all'anello. Con "Riduci movimento" attivo il logo resta fermo.
+
+### Correzioni
+- **Suggerimenti della descrizione:** i nomi lunghi di attività, progetti e work item di Azure DevOps non escono più dall'elenco, ma finiscono con "…".
+- **Finestra compatta:** scorrendo, le sessioni arrivano fino alla linea in fondo, senza più una fascia vuota dove il testo veniva tagliato.
 
 ## DevTrack 0.1.12
 
