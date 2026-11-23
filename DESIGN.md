@@ -589,6 +589,8 @@ the widest, the full breakdown on hover); it is hidden when there is one project
   removes the time. More time lengthens that day's last session on the project, or adds one
   after the day's last session (from 9:00 at the earliest); less time shortens the last
   sessions. Future days are disabled; a running session is not counted until it stops.
+  Day columns read down one left edge: the day's header and its total start where the hours
+  start inside the cells (the field's 12 padding in); the Total column stays right-aligned.
   Under the grid, two labelled fields side by side (top-aligned, stacking when narrow); what each
   does sits behind an "i" next to its label (`field_info` / `info_tip`, hover; the text is also
   the accessible name). **Add a project to the week**: a project picker; the row appears and the

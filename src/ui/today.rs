@@ -1638,13 +1638,18 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
     let right = |ui: &mut egui::Ui, width: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
         ui.allocate_ui_with_layout(egui::vec2(width, CTRL_H), egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.set_width(width); add(ui); });
     };
+    // a day's header and total start where the hours start inside its cells: the field's own
+    // padding in from the left edge, so a column reads down one line
+    let day_col = |ui: &mut egui::Ui, width: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
+        ui.allocate_ui_with_layout(egui::vec2(width, CTRL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.set_width(width); ui.add_space(PAD_X); add(ui); });
+    };
     // header
     row(ui, 28.0, |ui| {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
         ui.allocate_ui_with_layout(egui::vec2(name_w, CTRL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.set_width(name_w); label(ui, "Project"); });
         for d in &days {
             let text = format!("{} {}", super::i18n::weekday_short(*d), d.format("%d"));
-            right(ui, cell_w, &mut |ui| { ui.label(RichText::new(&text).size(12.0).color(if *d == today() { c.text } else { c.text2 })); });
+            day_col(ui, cell_w, &mut |ui| { ui.label(RichText::new(&text).size(12.0).color(if *d == today() { c.text } else { c.text2 })); });
         }
         right(ui, total_w, &mut |ui| { label(ui, "Total"); });
         ui.add_space(remove_w);
@@ -1716,7 +1721,7 @@ fn timesheet(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &P
         for i in 0..days.len() {
             let sum: i64 = rows.iter().map(|r| r.1[i]).sum();
             grand += sum;
-            right(ui, cell_w, &mut |ui| { ui.label(mono(if sum == 0 { "—".to_string() } else { cell_text(sum) }, 13.0).color(if sum == 0 { c.text2 } else { c.text })); });
+            day_col(ui, cell_w, &mut |ui| { ui.label(mono(if sum == 0 { "—".to_string() } else { cell_text(sum) }, 13.0).color(if sum == 0 { c.text2 } else { c.text })); });
         }
         right(ui, total_w, &mut |ui| { mixed_medium(ui, &if grand == 0 { "—".to_string() } else { words(grand) }, 14.0); });
         ui.add_space(remove_w);
