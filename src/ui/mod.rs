@@ -1082,12 +1082,20 @@ impl App {
         }
     }
 
-    /// Clamp a window position so its size fits inside the monitor (kept on screen).
-    pub fn clamp_to_monitor(pos: egui::Pos2, size: egui::Vec2, monitor: Option<egui::Vec2>) -> egui::Pos2 {
-        let Some(m) = monitor else { return pos };
-        let x = pos.x.min(m.x - size.x).max(0.0);
-        let y = pos.y.min(m.y - size.y).max(0.0);
+    /// Clamp a window position so its size fits inside the screen (kept on screen).
+    pub fn clamp_to_screen(pos: egui::Pos2, size: egui::Vec2, screen: Option<egui::Rect>) -> egui::Pos2 {
+        let Some(m) = screen else { return pos };
+        let x = pos.x.min(m.right() - size.x).max(m.left());
+        let y = pos.y.min(m.bottom() - size.y).max(m.top());
         egui::pos2(x, y)
+    }
+
+    /// Where the window goes when it switches between full and compact: its top-left corner stays
+    /// where it is, on the screen it is on, moved only as much as the new size needs to fit there.
+    fn switch_position(info: &egui::ViewportInfo, size: egui::Vec2) -> Option<egui::Pos2> {
+        let outer = info.outer_rect?;
+        let screen = monitors::screen_at(outer.center(), info.monitor_size);
+        Some(Self::clamp_to_screen(outer.min, size, screen))
     }
 
     pub fn enter_compact(&mut self, ctx: &egui::Context) {
@@ -1104,11 +1112,12 @@ impl App {
         self.full_inner = info.inner_rect.map(|r| r.size());
         self.full_page = self.page;
         self.mode = WinMode::Compact;
-        let (pos, size) = match self.store.local.compact_rect {
-            Some([x, y, w, h]) => (egui::pos2(x, y), egui::vec2(w.max(COMPACT_MIN[0]), h.max(COMPACT_MIN[1]))),
-            None => (info.outer_rect.map(|r| r.min).unwrap_or(egui::pos2(40.0, 40.0)), egui::vec2(COMPACT_SIZE[0], COMPACT_SIZE[1])),
+        // the compact window keeps the size it had last time, and opens where the full one is
+        let size = match self.store.local.compact_rect {
+            Some([_, _, w, h]) => egui::vec2(w.max(COMPACT_MIN[0]), h.max(COMPACT_MIN[1])),
+            None => egui::vec2(COMPACT_SIZE[0], COMPACT_SIZE[1]),
         };
-        let pos = Self::clamp_to_monitor(pos, size, info.monitor_size);
+        let pos = Self::switch_position(&info, size).unwrap_or(egui::pos2(40.0, 40.0));
         if self.shot.is_none() {
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(COMPACT_MIN[0], COMPACT_MIN[1])));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
@@ -1132,7 +1141,8 @@ impl App {
         }
         self.mode = WinMode::Full;
         let size = self.full_inner.unwrap_or(egui::vec2(1360.0, 860.0));
-        let pos = Self::clamp_to_monitor(self.full_outer.map(|r| r.min).unwrap_or(egui::pos2(40.0, 40.0)), size, info.monitor_size);
+        // the full window keeps its size and opens where the compact one is
+        let pos = Self::switch_position(&info, size).unwrap_or(egui::pos2(40.0, 40.0));
         if self.shot.is_none() {
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(360.0, 480.0)));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
@@ -2228,11 +2238,17 @@ mod tests {
 
     #[test]
     fn compact_window_stays_on_screen() {
-        let m = Some(egui::vec2(1440.0, 900.0));
-        let p = App::clamp_to_monitor(egui::pos2(1300.0, 800.0), egui::vec2(430.0, 720.0), m);
+        let m = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0)));
+        let p = App::clamp_to_screen(egui::pos2(1300.0, 800.0), egui::vec2(430.0, 720.0), m);
         assert_eq!(p, egui::pos2(1010.0, 180.0));
-        let p2 = App::clamp_to_monitor(egui::pos2(-50.0, -20.0), egui::vec2(430.0, 720.0), m);
+        let p2 = App::clamp_to_screen(egui::pos2(-50.0, -20.0), egui::vec2(430.0, 720.0), m);
         assert_eq!(p2, egui::pos2(0.0, 0.0));
+        // a second screen to the right: the window stays on it, not pulled back onto the first
+        let right = Some(egui::Rect::from_min_size(egui::pos2(1440.0, 0.0), egui::vec2(1920.0, 1080.0)));
+        let p3 = App::clamp_to_screen(egui::pos2(1600.0, 100.0), egui::vec2(1360.0, 860.0), right);
+        assert_eq!(p3, egui::pos2(1600.0, 100.0));
+        let p4 = App::clamp_to_screen(egui::pos2(3000.0, 100.0), egui::vec2(1360.0, 860.0), right);
+        assert_eq!(p4, egui::pos2(2000.0, 100.0));
     }
     #[test]
     fn task_search_show_and_add_never_overlap() {
