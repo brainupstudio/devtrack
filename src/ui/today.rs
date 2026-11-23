@@ -573,7 +573,7 @@ pub(super) fn suggestions(db: &Db, q: &str, remote: Option<&RemoteSuggest>) -> V
 
 /// The description field: large, framed, with suggestions from earlier work while typing.
 /// Returns true when Enter asks to start (idle only, no suggestion highlighted).
-fn description(app: &mut App, ui: &mut egui::Ui, running: Option<&TimeEntry>, width: f32) -> bool {
+pub(super) fn description(app: &mut App, ui: &mut egui::Ui, running: Option<&TimeEntry>, width: f32) -> bool {
     let c = p(ui);
     // the field names the task: the chosen one's title, or what is typed for a new one
     let mut text = match running {

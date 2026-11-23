@@ -127,27 +127,65 @@ fn session(app: &mut App, ui: &mut egui::Ui) {
     let w = ui.available_width();
     let half = (w - ROW_GAP) / 2.0;
     if let Some(e) = app.store.db.running().cloned() {
+        // what is being tracked can change while it runs, as on Today: the task is a field with the
+        // same suggestions, the project a link to its list; the timer keeps counting
+        super::today::description(app, ui, Some(&e), w);
+        let e = app.store.db.running().cloned().unwrap_or(e);
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
-            dot(ui, c.green, 3.5);
-            ui.label(RichText::new(tr("Tracking now")).size(12.0).color(c.green));
-        });
-        let what = super::session_title(&app.store.db, &e);
-        ui.add(egui::Label::new(RichText::new(&what).font(medium(16.0))).truncate()).on_hover_text(&what);
-        ui.horizontal(|ui| {
-            if let Some(pr) = app.store.db.project(&e.project_id) {
-                dot(ui, hex(&pr.color), 3.5);
-                ui.add(egui::Label::new(RichText::new(&pr.name).size(12.0).color(c.text2)).truncate());
-            } else {
-                ui.label(RichText::new(tr("No project")).size(12.0).color(c.amber));
+            // the links sit as on Today: no gap but the separator's own
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let rp = recent_projects(&app.store.db);
+            let mut proj = e.project_id.clone();
+            let pick = project_picker_in(ui, "compact-run-project", &app.store.db, &rp, &mut proj, Trigger::Link, None);
+            let proj = match pick {
+                Pick::Create(n) => Some(app.create_project(&n)),
+                Pick::Changed => proj,
+                _ => e.project_id.clone(),
+            };
+            if proj != e.project_id {
+                // a task of another project no longer fits the session
+                let keep_task = app.store.db.task(&e.task_id).is_some_and(|t| t.project_id.is_none() || t.project_id == proj);
+                let billable = app.store.db.project(&proj).map(|p| p.billable_default).unwrap_or(e.billable);
+                app.store.update_running(|x| {
+                    x.project_id = proj.clone();
+                    if !keep_task { x.task_id = None; }
+                    x.billable = billable;
+                });
+                app.notify(tr("Project changed: the session keeps running"));
             }
-            if let Some(t) = app.store.db.task(&e.task_id) {
-                if let Some(id) = &t.external_id {
-                    ui.label(mono(format!("#{}", id), 12.0).color(c.text2));
-                }
-                ui.add(egui::Label::new(RichText::new(&t.title).size(12.0).color(c.text2)).truncate());
+            // the client follows the project, as on Today; chosen here it narrows the project to
+            // its own (the only one, when it has one)
+            ui.label(RichText::new("  ·  ").size(13.0).color(c.text2));
+            let mut chosen = app.store.db.project(&e.project_id).and_then(|p| p.client_id.clone()).filter(|id| app.store.db.client(&Some(id.clone())).is_some());
+            let before = chosen.clone();
+            let cp = client_select_with(ui, "compact-run-client", &app.store.db, &mut chosen, Trigger::Link);
+            if let Pick::Create(name) = &cp {
+                let cl = Client { id: new_id(), name: name.trim().to_string(), ..Default::default() };
+                chosen = Some(cl.id.clone());
+                app.store.put_client(cl);
+            }
+            if chosen != before {
+                let own: Vec<Id> = chosen.as_ref().map(|cid| app.store.db.projects_of_client(cid).into_iter().filter(|p| !p.archived).map(|p| p.id.clone()).collect()).unwrap_or_default();
+                let proj = if own.len() == 1 { Some(own[0].clone()) } else { None };
+                let keep_task = app.store.db.task(&e.task_id).is_some_and(|t| t.project_id.is_none() || t.project_id == proj);
+                app.store.update_running(|x| {
+                    x.project_id = proj.clone();
+                    if !keep_task { x.task_id = None; }
+                });
+                app.notify(tr("Project changed: the session keeps running"));
+            }
+            if app.store.db.project(&e.project_id).is_none() {
+                ui.add_space(8.0);
+                ui.label(RichText::new(tr("! Choose a project")).size(12.0).color(c.amber));
             }
         });
-        let t = super::today::running_timer(ui, &e, now, 34.0);
+        // running: the green dot beside the time, as in the full window, instead of a line of its own
+        let t = ui.allocate_ui_with_layout(egui::vec2(w, 48.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            dot(ui, c.green, 4.0);
+            super::today::running_timer(ui, &e, now, 34.0)
+        }).inner;
         if t.clicked() || std::mem::take(&mut app.today.run_time_request) {
             super::today::open_run_time(app, ui, &e, t.rect);
         }

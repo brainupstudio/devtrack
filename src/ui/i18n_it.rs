@@ -1285,4 +1285,6 @@ pub static IT: &[(&str, &str)] = &[
     ("Go to date", "Vai alla data"),
     ("Not a date: type it as 23/11/2026, 23/11 or 2026-11-23.", "Non è una data: scrivila come 23/11/2026, 23/11 o 2026-11-23."),
     ("Click to type a date or pick it on the calendar", "Clic per scrivere una data o sceglierla dal calendario"),
+    ("Project changed: the session keeps running", "Progetto cambiato: la sessione continua"),
+    ("! Choose a project", "! Scegli un progetto"),
 ];
