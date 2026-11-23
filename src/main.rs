@@ -89,9 +89,11 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
     // window and Dock icon: the white mark on a black rounded square, drawn on the macOS grid.
-    // A packaged macOS app keeps the icon of its bundle: setting one here would replace the
-    // system's own drawing of it in the Dock while DevTrack runs.
-    if let Some(icon) = (!in_app_bundle()).then(|| image::load_from_memory(include_bytes!("../assets/icons/app-icon.png")).ok()).flatten() {
+    // A packaged macOS app keeps the icon of its bundle. With no icon given, eframe would set its
+    // own ("e"); an empty one can't be turned into an image, so eframe leaves the Dock alone.
+    if in_app_bundle() {
+        viewport = viewport.with_icon(egui::IconData::default());
+    } else if let Ok(icon) = image::load_from_memory(include_bytes!("../assets/icons/app-icon.png")) {
         let icon = icon.into_rgba8();
         let (width, height) = icon.dimensions();
         viewport = viewport.with_icon(egui::IconData { rgba: icon.into_raw(), width, height });
@@ -170,4 +172,15 @@ fn main() -> eframe::Result<()> {
 /// Whether this program runs from inside a macOS app bundle (".app/Contents/MacOS/").
 fn in_app_bundle() -> bool {
     cfg!(target_os = "macos") && std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_empty_icon_is_not_set() {
+        // what keeps the bundle's icon in the Dock: eframe sets the icon only if it can make a
+        // PNG of it, and falls back to its own "e" when none is given
+        use eframe::icon_data::IconDataExt as _;
+        assert!(eframe::egui::IconData::default().to_png_bytes().is_err());
+    }
 }
