@@ -666,6 +666,7 @@ Supersedes the 28 px page heading and the two-line session panel in wide windows
 ## Session list: day bands, time range, conversions column (19 Nov 2026)
 
 - A day is a band of the table: 36 high, `nav` fill, 14 px inset like the rows, weekday Medium 13, date Mono 12, and the day total right-aligned on the Duration column in the same format as the rows.
+- In the compact window a day is a band too (23 Nov 2026): 32 high, 16 above it, a fill halfway between `nav` and `selected` so it reads in both themes (the rows' hover stays lighter). It reaches 12 past the rows on each side, so the weekday (Medium 13, full text colour) and the date (Mono 12) start on the rows' left edge and the day total (Medium 13) ends on their right edge. It opens the group: the last session of a day has no line under it.
 - Clock intervals read `09:00 → 09:14` everywhere (`range_job`): times in Geist Mono, arrow in Geist.
 - From 760 px the conversions are a column of their own ("Conversioni"): one line per conversion, name then value (Mono 13) left-aligned 12 px after the longest name, so each value reads with its name and the values still line up down the list; more than three show two and "+n altre". Time and duration are single lines centred on the row.
 - 560–760 px: the interval moves under the duration and the conversions keep their column. Under 560 px: duration, values only ("0.75 · 0:45", names in the hover), interval.

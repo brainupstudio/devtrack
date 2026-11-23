@@ -16,7 +16,7 @@ use devtrack_core::model::*;
 use devtrack_core::report::{day_pieces, needs_completion, today, Period, PeriodKind};
 use devtrack_core::store::now_secs;
 use devtrack_core::timefmt::clock;
-use eframe::egui::{self, RichText, Sense, Stroke};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke};
 use std::collections::BTreeMap;
 
 pub struct CompactState {
@@ -233,17 +233,29 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
     let w = ui.available_width();
     for (date, mut list) in by_day.into_iter().rev() {
         list.sort_by_key(|x| std::cmp::Reverse(x.1));
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let name = if date == today() { tr("Today") } else if date == today() - CDur::days(1) { tr("Yesterday") } else { super::i18n::weekday_title(date) };
-            ui.label(RichText::new(name).font(medium(13.0)));
-            ui.label(mono(super::i18n::short_date(date), 12.0).color(c.text2));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                mixed(ui, &words(list.iter().map(|x| x.2 - x.1).sum::<i64>() + running_by_day.get(&date).copied().unwrap_or(0)), 12.0, Some(c.text2));
-            });
-        });
-        divider(ui);
-        for (e, a, b) in &list {
+        // a day is a band, as in Today's list: the nav fill, 14 in like the rows, the weekday in
+        // full colour and the day's total on the right; it opens the group, so no line under it
+        ui.add_space(16.0);
+        let (slot, _) = ui.allocate_exact_size(egui::vec2(w, 32.0), Sense::hover());
+        // the band reaches 12 past the rows on each side, so its words start on the rows' edge
+        let band = slot.expand2(egui::vec2(12.0, 0.0));
+        // a step above the window's fill, clearly a band in both themes (the rows' hover is lighter)
+        let fill = Color32::from_rgb(((c.nav.r() as u16 + c.selected.r() as u16) / 2) as u8, ((c.nav.g() as u16 + c.selected.g() as u16) / 2) as u8, ((c.nav.b() as u16 + c.selected.b() as u16) / 2) as u8);
+        ui.painter().rect_filled(band, RADIUS, fill);
+        let name = if date == today() { tr("Today") } else if date == today() - CDur::days(1) { tr("Yesterday") } else { super::i18n::weekday_title(date) };
+        let gn = ui.painter().layout_no_wrap(name, medium(13.0), c.text);
+        let gd = ui.painter().layout_no_wrap(super::i18n::short_date(date), mono_font(12.0), c.text2);
+        let y = band.center().y;
+        let x0 = slot.left();
+        let wn = gn.size().x;
+        ui.painter().galley(egui::pos2(x0, y - gn.size().y / 2.0), gn, c.text);
+        ui.painter().galley(egui::pos2(x0 + wn + 8.0, y - gd.size().y / 2.0), gd, c.text2);
+        let total = list.iter().map(|x| x.2 - x.1).sum::<i64>() + running_by_day.get(&date).copied().unwrap_or(0);
+        let gt = ui.painter().layout_job(mixed_job(&words(total), 13.0, c.text, medium(13.0), mono_medium(13.0)));
+        ui.painter().galley(egui::pos2(slot.right() - gt.size().x, y - gt.size().y / 2.0), gt, c.text);
+        ui.add_space(2.0);
+        let rows_in_day = list.len();
+        for (ri, (e, a, b)) in list.iter().enumerate() {
             let mut actions_left = f32::INFINITY;
             // line 1: title · duration · ▶ · "···"; line 2 (full row width): time and project
             let row = ui.vertical(|ui| {
@@ -303,7 +315,10 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
             if ui.interact(click, egui::Id::new(("compact-row", &e.id, *a)), Sense::click()).clicked() {
                 action = Some((1, e.clone()));
             }
-            divider(ui);
+            // between sessions of a day; the next day's band does the separating after the last
+            if ri + 1 < rows_in_day {
+                divider(ui);
+            }
         }
     }
     ui.add_space(12.0);
