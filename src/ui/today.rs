@@ -73,6 +73,8 @@ pub struct TodayState {
     pub preview_task_menu: bool,
     pub only_incomplete: bool,
     pub edit: Option<Edit>,
+    /// Where the compact window's session popover points: the row (or button) that opened it.
+    pub edit_anchor: Option<egui::Rect>,
     pub run_desc: Option<(Id, String)>,
     /// Put the cursor in the description field on the next frame (menu bar "New session").
     pub focus_desc: bool,
@@ -91,7 +93,7 @@ pub struct TodayState {
 
 impl TodayState {
     pub fn new(period: Period) -> Self {
-        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
+        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
     }
 }
 
@@ -2251,7 +2253,49 @@ fn time_block(ui: &mut egui::Ui, db: &Db, w: f32, t: TimeBlock) -> TimeOut {
     out
 }
 
+/// Save what the editor holds, after the same checks everywhere: closed days, a client without
+/// one of its projects, the time fields, a session over 24 hours (saved on a second Save). True
+/// when it was saved (or nothing changed) and the editor can close.
+fn save_edit(app: &mut App, ed: &mut Edit) -> bool {
+    ed.attempted = true;
+    let moved_into_lock = edit::resolve(&ed.f, &ed.orig, ed.original.start, ed.original.stop).map(|r| devtrack_core::report::locked(&app.store.db, r.start)).unwrap_or(false);
+    if devtrack_core::report::locked(&app.store.db, ed.original.start) || moved_into_lock {
+        ed.errors.insert("general", locked_text(app));
+    } else if ed.client.is_some() && ed.entry.project_id.is_none() {
+        ed.errors.insert("project", "Choose one of this client's projects".into());
+    } else if !validate_edit(ed) {
+        ed.focus_field = ["date", "start", "end_date", "end", "dur"].into_iter().find(|k| ed.errors.contains_key(k));
+    } else if let Ok(res) = edit::resolve(&ed.f, &ed.orig, ed.original.start, ed.original.stop) {
+        let confirmed = ed.confirm_long == Some((res.start, res.stop.unwrap_or(res.start)));
+        if res.long && !confirmed {
+            ed.confirm_long = Some((res.start, res.stop.unwrap_or(res.start)));
+        } else {
+            let mut e = ed.entry.clone();
+            e.start = res.start;
+            e.stop = res.stop;
+            match validate(&e) {
+                Ok(()) => {
+                    if e != ed.original {
+                        app.store.put_entry(e);
+                        app.notify(tr("Session saved"));
+                    }
+                    return true;
+                }
+                Err(m) => {
+                    ed.errors.insert(if m.contains("future") { "start" } else { "end" }, tr(&m));
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn edit_modal(app: &mut App, ctx: &egui::Context) {
+    // the compact window edits a finished session in a small popover by its row
+    if app.mode == super::WinMode::Compact && app.today.edit.as_ref().is_some_and(|e| e.entry.stop.is_some()) {
+        compact_edit(app, ctx);
+        return;
+    }
     let Some(mut ed) = app.today.edit.take() else { return };
     let dark = app.dark();
     let c = pal(dark);
@@ -2404,37 +2448,8 @@ pub fn edit_modal(app: &mut App, ctx: &egui::Context) {
             if w < 460.0 { ui.end_row(); }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // after the long-session notice the same button says what it will do
-                if primary(ui, if ed.confirm_long.is_some() { "Save anyway" } else { "Save" }).clicked() {
-                    ed.attempted = true;
-                    let moved_into_lock = edit::resolve(&ed.f, &ed.orig, ed.original.start, ed.original.stop).map(|r| devtrack_core::report::locked(&app.store.db, r.start)).unwrap_or(false);
-                    if devtrack_core::report::locked(&app.store.db, ed.original.start) || moved_into_lock {
-                        ed.errors.insert("general", locked_text(app));
-                    } else if ed.client.is_some() && ed.entry.project_id.is_none() {
-                        ed.errors.insert("project", "Choose one of this client's projects".into());
-                    } else if !validate_edit(&mut ed) {
-                        ed.focus_field = ["date", "start", "end_date", "end", "dur"].into_iter().find(|k| ed.errors.contains_key(k));
-                    } else if let Ok(res) = edit::resolve(&ed.f, &ed.orig, ed.original.start, ed.original.stop) {
-                        let confirmed = ed.confirm_long == Some((res.start, res.stop.unwrap_or(res.start)));
-                        if res.long && !confirmed {
-                            ed.confirm_long = Some((res.start, res.stop.unwrap_or(res.start)));
-                        } else {
-                            let mut e = ed.entry.clone();
-                            e.start = res.start;
-                            e.stop = res.stop;
-                            match validate(&e) {
-                                Ok(()) => {
-                                    if e != ed.original {
-                                        app.store.put_entry(e);
-                                        app.notify(tr("Session saved"));
-                                    }
-                                    close = true;
-                                }
-                                Err(m) => {
-                                    ed.errors.insert(if m.contains("future") { "start" } else { "end" }, tr(&m));
-                                }
-                            }
-                        }
-                    }
+                if primary(ui, if ed.confirm_long.is_some() { "Save anyway" } else { "Save" }).clicked() && save_edit(app, &mut ed) {
+                    close = true;
                 }
                 if secondary(ui, "Cancel").clicked() {
                     if ed.dirty() {
@@ -2671,6 +2686,36 @@ mod session_panel_tests {
         }
     }
 
+    /// In the compact window a finished session opens in the small popover (not the dialog), the
+    /// click that opened it does not close it, and a typed duration moves the end when saved.
+    #[test]
+    fn compact_window_edits_a_session_in_a_popover() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = demo();
+        app.mode = super::super::WinMode::Compact;
+        let e = app.store.db.live_entries().filter(|e| e.stop.is_some()).max_by_key(|e| e.start).cloned().expect("a finished session");
+        open_edit(&mut app, &e, None, false);
+        app.today.edit_anchor = Some(egui::Rect::from_min_size(egui::pos2(16.0, 200.0), egui::vec2(360.0, 60.0)));
+        let click_at = egui::pos2(30.0, 220.0);
+        // the opening click, still down on the row, then a plain frame
+        for events in [vec![egui::Event::PointerButton { pos: click_at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }], vec![]] {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(430.0, 800.0))), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |_| {});
+                edit_modal(&mut app, ctx);
+            });
+        }
+        assert!(app.today.edit.is_some(), "the popover stays open after the click that opened it");
+        assert!(ctx.memory(|m| m.layer_ids().any(|l| l.id == egui::Id::new("compact-edit"))), "drawn as the compact popover");
+        let mut ed = app.today.edit.take().unwrap();
+        ed.f.duration = "1:00".into();
+        ed.f.duration_edited = true;
+        assert!(save_edit(&mut app, &mut ed));
+        let saved = app.store.db.live_entries().find(|x| x.id == e.id).cloned().unwrap();
+        assert_eq!(saved.start, e.start);
+        assert_eq!(saved.stop, Some(e.start + 3600));
+    }
+
     #[test]
     fn suggestions_match_project_names_and_never_repeat() {
         let app = demo();
@@ -2747,4 +2792,261 @@ pub fn conversions_icon(ui: &mut egui::Ui, salt: impl std::hash::Hash, profiles:
     });
     let conv = if open { conv } else { conv.on_hover_ui(|ui| { conversions_card(ui, profiles, secs, false); }) };
     (conv, copied)
+}
+
+
+/// The compact window's session editor, with only what a quick fix needs (task, project,
+/// duration, start → end, day), Delete and Save; notes, tags, billable and the client are in the
+/// full window's editor. Where the system lets an app place its windows it opens as a small window
+/// of its own beside the compact one, as other trackers do; otherwise (Linux on Wayland, embedded
+/// viewports, review pictures) as a popover by the row. Esc, ✕ and a click elsewhere close it,
+/// asking first in its footer when something changed.
+fn compact_edit(app: &mut App, ctx: &egui::Context) {
+    let Some(mut ed) = app.today.edit.take() else { return };
+    let beside = side_window_allowed(app, ctx);
+    let close = if beside { compact_edit_window(app, ctx, &mut ed) } else { compact_edit_popover(app, ctx, &mut ed) };
+    if close {
+        app.today.edit_anchor = None;
+        ctx.data_mut(|d| d.remove::<bool>(egui::Id::new("compact-edit-had-focus")));
+        app.restore_focus(ctx);
+    } else {
+        app.today.edit = Some(ed);
+    }
+}
+
+/// A window of its own needs a system that lets the app place it: not Linux on Wayland, not
+/// embedded viewports, not review pictures (they capture one window).
+fn side_window_allowed(app: &App, ctx: &egui::Context) -> bool {
+    let wayland = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
+    !wayland && !ctx.embed_viewports() && app.shot.is_none() && ctx.input(|i| i.viewport().outer_rect.is_some())
+}
+
+/// Closing asked by ✕, Esc or a click elsewhere: at once when nothing changed, otherwise the
+/// footer asks first (a second request closes).
+fn request_close(ed: &mut Edit) -> bool {
+    if ed.dirty() && !ed.confirm_discard {
+        ed.confirm_discard = true;
+        false
+    } else {
+        true
+    }
+}
+
+/// Beside the compact window: a borderless window that stays on top, on the right of it (on the
+/// left when the screen ends there), level with the row that opened it. It follows the compact
+/// window when that moves. Losing focus counts as a click elsewhere.
+fn compact_edit_window(app: &mut App, ctx: &egui::Context, ed: &mut Edit) -> bool {
+    let w = 380.0;
+    let outer_w = w + 24.0;
+    let info = ctx.input(|i| i.viewport().clone());
+    let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) else { return compact_edit_popover(app, ctx, ed) };
+    let mon = info.monitor_size.unwrap_or(egui::vec2(f32::INFINITY, f32::INFINITY));
+    let h_id = egui::Id::new("compact-edit-h");
+    let h: f32 = ctx.data(|d| d.get_temp(h_id)).unwrap_or(440.0);
+    let x = if outer.right() + 8.0 + outer_w <= mon.x { outer.right() + 8.0 } else { (outer.left() - 8.0 - outer_w).max(0.0) };
+    let anchor = app.today.edit_anchor.unwrap_or(egui::Rect::from_min_size(egui::pos2(0.0, 120.0), egui::vec2(10.0, 10.0)));
+    let y = (inner.top() + anchor.top() - 12.0).min(mon.y - h - 8.0).max(outer.top());
+    let builder = egui::ViewportBuilder::default()
+        .with_title(tr("Edit session"))
+        .with_position(egui::pos2(x, y))
+        .with_inner_size(egui::vec2(outer_w, h))
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_taskbar(false)
+        .with_active(true)
+        // see-through, so the editor's own rounded frame is the window's shape
+        .with_transparent(true)
+        .with_window_level(egui::WindowLevel::AlwaysOnTop);
+    let dark = app.dark();
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("compact-edit-window"), builder, |cctx, _class| {
+        let c = pal(dark);
+        let mut out = (false, false);
+        // the panel is clear; the frame inside it is the editor, rounded like the popover, and its
+        // measured height (not the window's) sets the window's
+        let panel = egui::CentralPanel::default().frame(egui::Frame::NONE.fill(Color32::TRANSPARENT)).show(cctx, |ui| {
+            egui::Frame::new().fill(c.raised).stroke(Stroke::new(1.0, c.line)).corner_radius(10.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+                ui.set_width(w);
+                ui.spacing_mut().item_spacing.y = ROW_GAP;
+                out = compact_edit_body(app, ui, ed, w);
+            }).response.rect.height()
+        });
+        // the window is as tall as what it holds, and taller while a menu or the calendar is open
+        let menus = cctx.memory(|m| m.any_popup_open());
+        let want = (panel.inner + 1.0).max(if menus { 600.0 } else { 0.0 }).ceil();
+        if (want - h).abs() > 1.0 {
+            cctx.data_mut(|d| d.insert_temp(h_id, want));
+            cctx.request_repaint();
+        }
+        let (mut close, mut ask) = out;
+        let focused = cctx.input(|i| i.viewport().focused);
+        let had = cctx.data(|d| d.get_temp::<bool>(egui::Id::new("compact-edit-had-focus"))).unwrap_or(false);
+        if focused == Some(true) && !had {
+            cctx.data_mut(|d| d.insert_temp(egui::Id::new("compact-edit-had-focus"), true));
+        }
+        // clicked elsewhere: on the compact window or another app
+        if had && focused == Some(false) && !menus {
+            ask = true;
+        }
+        if !menus && cctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ask = true;
+        }
+        if ask && !close {
+            close = request_close(ed);
+        }
+        close
+    })
+}
+
+/// Inside the compact window, by the row: under it when it fits, otherwise over it.
+fn compact_edit_popover(app: &mut App, ctx: &egui::Context, ed: &mut Edit) -> bool {
+    let c = pal(app.dark());
+    let screen = ctx.screen_rect();
+    let w = (screen.width() - 48.0).clamp(260.0, 380.0);
+    let outer = w + 24.0;
+    let anchor = app.today.edit_anchor.unwrap_or(egui::Rect::from_center_size(screen.center(), egui::vec2(10.0, 10.0)));
+    let est_h = 420.0;
+    let x = (screen.center().x - outer / 2.0).max(screen.left() + 8.0);
+    let below = anchor.bottom() + 6.0 + est_h <= screen.bottom() - 8.0;
+    let (pos, pivot) = if below { (egui::pos2(x, anchor.bottom() + 6.0), egui::Align2::LEFT_TOP) } else { (egui::pos2(x, (anchor.top() - 6.0).max(screen.top() + est_h + 8.0).min(screen.bottom() - 8.0)), egui::Align2::LEFT_BOTTOM) };
+    let mut out = (false, false);
+    let area = egui::Area::new(egui::Id::new("compact-edit")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).constrain(true).show(ctx, |ui| {
+        egui::Frame::new().fill(c.raised).stroke(Stroke::new(1.0, c.line)).corner_radius(10.0).inner_margin(egui::Margin::same(12)).shadow(egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(110) }).show(ui, |ui| {
+            ui.set_width(w);
+            ui.spacing_mut().item_spacing.y = ROW_GAP;
+            out = compact_edit_body(app, ui, ed, w);
+        });
+    });
+    let (close, mut ask) = out;
+    let menus_open = ctx.memory(|m| m.any_popup_open());
+    // only a click on the page under it counts: the pickers' menus and the calendar are layers of
+    // their own; and not the click that opened it, on its row
+    let first_frame = !std::mem::replace(&mut ed.focused_once, true);
+    let on_page = |p: egui::Pos2| ctx.layer_id_at(p).map(|l| l.order == egui::Order::Background).unwrap_or(true);
+    let outside = !first_frame && ctx.input(|i| i.pointer.any_click()) && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !area.response.rect.contains(p) && on_page(p));
+    if outside || (!menus_open && ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
+        ask = true;
+    }
+    close || (ask && request_close(ed))
+}
+
+/// What the compact editor shows, wherever it is drawn. Returns (closed, asked to close).
+fn compact_edit_body(app: &mut App, ui: &mut egui::Ui, ed: &mut Edit, w: f32) -> (bool, bool) {
+    let c = p(ui);
+    let monday = app.store.db.settings.week_starts_monday;
+    let mut close = false;
+    let mut ask_close = false;
+    row(ui, 28.0, |ui| {
+        ui.label(RichText::new(tr("Edit session")).font(medium(15.0)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if icon_ghost(ui, Glyph::Close, "Close (Esc)").clicked() {
+                ask_close = true;
+            }
+        });
+    });
+    // what it was: the task across the width, then its project
+    let remote = RemoteSuggest::of(app);
+    let rt = recent_tasks(&app.store.db);
+    let rp = recent_projects(&app.store.db);
+    let b = task_picker(ui, "compact-edit-task", &app.store.db, remote.as_ref(), &rt, &mut ed.entry.project_id, &mut ed.entry.task_id, w);
+    let a = project_picker(ui, "compact-edit-project", &app.store.db, &rp, &mut ed.entry.project_id, w);
+    let mut client = ed.client.clone();
+    settle_work(app, b, a, Pick::None, &mut ed.entry.project_id, Some(&mut ed.entry.task_id), &mut client);
+    ed.client = client;
+    if let Some(m) = ed.errors.get("project").cloned() {
+        ui.label(RichText::new(tr(&m)).size(12.0).color(c.red));
+    }
+    ui.add_space(4.0);
+    // the time: the duration first (as it reads in the row), then start → end and the day
+    let bad = |k: &str| ed.errors.contains_key(k);
+    let (bd, bs, be, bdate) = (bad("dur"), bad("start"), bad("end") || bad("end_date"), bad("date"));
+    field(ui, "Duration", None, None, |ui| {
+        let r = input(ui, &mut ed.f.duration, Field::new("Duration", w).mono().invalid(bd).hint("1:30 · 1.5 · 90"));
+        if r.changed() {
+            ed.f.duration_edited = true;
+        }
+    });
+    let half = (w - 24.0 - ROW_GAP * 2.0) / 2.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ROW_GAP;
+        if time_input(ui, &mut ed.f.start, "Start time", half, bs).changed() {
+            ed.f.duration_edited = false;
+        }
+        let (r, _) = ui.allocate_exact_size(egui::vec2(24.0, CTRL_H), Sense::hover());
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "→", sans(16.0), c.text2);
+        if time_input(ui, &mut ed.f.end, "End time", half, be).changed() {
+            ed.f.duration_edited = false;
+        }
+    });
+    let before = ed.f.start_date.clone();
+    if date_input(ui, &mut ed.f.start_date, "Start date", w, bdate, monday).changed() {
+        ed.f.duration_edited = false;
+    }
+    // the end's day moves with the start's: a session over midnight stays over midnight
+    if ed.f.start_date != before {
+        if let (Ok(a), Ok(b), Ok(e)) = (NaiveDate::parse_from_str(before.trim(), "%Y-%m-%d"), NaiveDate::parse_from_str(ed.f.start_date.trim(), "%Y-%m-%d"), NaiveDate::parse_from_str(ed.f.end_date.trim(), "%Y-%m-%d")) {
+            ed.f.end_date = (e + (b - a)).format("%Y-%m-%d").to_string();
+        }
+    }
+    // the other side follows what was typed: the duration from start and end, or the end
+    // from the duration
+    if let Ok(res) = edit::resolve(&ed.f, &ed.orig, ed.original.start, ed.original.stop) {
+        if let Some(stop) = res.stop {
+            if ed.f.duration_edited {
+                let end = clock_text(stop, true);
+                if end != ed.f.end { ed.f.end = end; }
+                let end_date = local_date(stop).format("%Y-%m-%d").to_string();
+                if end_date != ed.f.end_date { ed.f.end_date = end_date; }
+            } else {
+                let d = format_duration(stop - res.start, DurationFormat::Improved);
+                if d != ed.f.duration { ed.f.duration = d; }
+            }
+        }
+    }
+    if ed.attempted {
+        validate_edit(ed);
+    }
+    let err = ["dur", "date", "start", "end_date", "end", "general"].into_iter().find_map(|k| ed.errors.get(k).cloned());
+    if let Some(m) = err {
+        ui.add(egui::Label::new(RichText::new(tr(&m)).size(12.0).color(c.red)).wrap());
+    }
+    if let Some((a, b)) = ed.confirm_long {
+        mixed(ui, &trf("! This session would last {}. Check the dates, or press “Save anyway”.", &[&words(b - a)]), 12.0, Some(c.amber));
+    }
+    ui.add_space(4.0);
+    divider(ui);
+    ui.add_space(4.0);
+    row(ui, CTRL_H, |ui| {
+        ui.spacing_mut().item_spacing.x = ROW_GAP;
+        if ed.confirm_discard {
+            ui.label(tr("Discard your changes?"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if danger(ui, "Discard").clicked() { close = true; }
+                if secondary(ui, "Keep editing").clicked() { ed.confirm_discard = false; }
+            });
+            return;
+        }
+        if ed.confirm_delete {
+            if danger(ui, "Delete session").clicked() {
+                if devtrack_core::report::locked(&app.store.db, ed.original.start) {
+                    ed.errors.insert("general", locked_text(app));
+                    ed.confirm_delete = false;
+                } else {
+                    app.store.delete_entry(&ed.entry.id);
+                    app.notify_undo(tr("Session deleted"));
+                    close = true;
+                }
+            }
+            if ghost(ui, "Keep").clicked() { ed.confirm_delete = false; }
+            return;
+        }
+        if danger(ui, "Delete…").clicked() {
+            ed.confirm_delete = true;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if primary(ui, if ed.confirm_long.is_some() { "Save anyway" } else { "Save" }).clicked() && save_edit(app, ed) {
+                close = true;
+            }
+        });
+    });
+    (close, ask_close)
 }

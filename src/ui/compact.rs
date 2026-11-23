@@ -226,6 +226,8 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
         }
     }
     let mut action: Option<(u8, TimeEntry)> = None;
+    // what the session popover points at: the row, or the ··· button its menu came from
+    let mut anchor: Option<egui::Rect> = None;
     if by_day.is_empty() {
         ui.add_space(12.0);
         meta(ui, trf_m!("No sessions in the last {} days.", app.compact_ui.days_loaded));
@@ -289,6 +291,7 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
                     }
                     if menu_row(ui, "Edit…", false, false).clicked() {
                         action = Some((1, e.clone()));
+                        anchor = Some(more.rect);
                     }
                     if menu_row(ui, "Delete", false, false).clicked() {
                         action = Some((2, e.clone()));
@@ -314,6 +317,7 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
             let click = egui::Rect::from_min_max(r.min, egui::pos2(actions_left.min(r.right()) - ROW_GAP, r.bottom()));
             if ui.interact(click, egui::Id::new(("compact-row", &e.id, *a)), Sense::click()).clicked() {
                 action = Some((1, e.clone()));
+                anchor = Some(r);
             }
             // between sessions of a day; the next day's band does the separating after the last
             if ri + 1 < rows_in_day {
@@ -331,6 +335,7 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
             1 => {
                 let review = needs_completion(&e);
                 open_edit(app, &e, Some(ui.ctx()), review);
+                app.today.edit_anchor = anchor;
             }
             _ => {
                 if devtrack_core::report::locked(&app.store.db, e.start) {

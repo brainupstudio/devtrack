@@ -11,7 +11,9 @@ On the left, the sidebar: **Today**, **Work**, **Report Time** and **Statistics*
 details. The control at the top collapses the sidebar to its icons (⌘B / Ctrl+B).
 
 The **compact window** (⌘⇧M / Ctrl+Shift+M, or the button at the top right) is a small timer
-that can stay above other windows (**Settings › General › Compact window**). On macOS a menu bar
+that can stay above other windows (**Settings › General › Compact window**). Clicking a session there opens a
+small editor by the row: task, project, duration, start and end, and the day; the full editor, with
+notes, tags and billable, is in the main window. On macOS a menu bar
 item shows the running session's time or today's total; closing the window keeps DevTrack
 running there, and **Quit DevTrack** in its menu (or ⌘Q) ends it.
 

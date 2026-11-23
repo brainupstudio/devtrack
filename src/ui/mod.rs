@@ -797,6 +797,15 @@ impl App {
                 widgets::SHOT_OPEN_PROJECT.store(true, std::sync::atomic::Ordering::Relaxed);
                 Page::Today
             }
+            // the compact window's session popover, on a finished session (with --compact)
+            "compact-edit" => {
+                let e = self.store.db.live_entries().filter(|e| e.stop.is_some()).max_by_key(|e| e.start).cloned();
+                if let Some(e) = e {
+                    today::open_edit(self, &e, None, false);
+                    self.today.edit_anchor = Some(egui::Rect::from_min_size(egui::pos2(16.0, 300.0), egui::vec2(380.0, 64.0)));
+                }
+                Page::Today
+            }
             // the period field's picker open: a day, a week
             "period-picker" | "period-picker-week" => {
                 self.today.timesheet = name == "period-picker-week";
@@ -1995,6 +2004,12 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Fully clear: the compact editor's own window is see-through so its rounded frame is its
+    /// shape. Every other window is covered edge to edge by its panels.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
         self.poll_update(ctx);
@@ -2002,6 +2017,9 @@ impl eframe::App for App {
         i18n::set_lang(i18n::LangPref::parse(&self.store.local.language).resolve());
         self.system_dark = ctx.system_theme().map(|t| t == egui::Theme::Dark);
         let dark = self.dark();
+        // the window is see-through (for the compact editor's own window): its whole area gets the
+        // app's background first, under the panels, so no hairline between panels shows through
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), 0.0, pal(dark).canvas);
         if self.theme != Some(dark) {
             apply_theme(ctx, dark);
             // the window itself too: macOS draws its edge from the window's appearance, a light

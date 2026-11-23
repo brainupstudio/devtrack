@@ -77,7 +77,11 @@ fn main() -> eframe::Result<()> {
         // a preview on sample data says so in its title: it is not the person's own data
         .with_title(if state.is_some() && !shooting { "DevTrack · anteprima con dati di esempio" } else if demo && !shooting { "DevTrack · DEMO (dati di esempio, salvati)" } else if test && !shooting { "DevTrack · PROVA (copia separata)" } else { "DevTrack" })
         .with_inner_size([size.0, size.1])
-        .with_min_inner_size(if args.iter().any(|a| a == "--compact") { [380.0, 480.0] } else { [360.0, 480.0] });
+        .with_min_inner_size(if args.iter().any(|a| a == "--compact") { [380.0, 480.0] } else { [360.0, 480.0] })
+        // the graphics context is made once, for this window: asking for transparency here is what
+        // lets the compact editor's own window be see-through (rounded). This window stays opaque
+        // to the eye: its panels cover it edge to edge.
+        .with_transparent(true);
     // macOS: no title bar. The page reaches the top edge and the three window buttons sit over
     // the sidebar; the app draws its own drag areas (see `ui::window_drag`).
     #[cfg(target_os = "macos")]
