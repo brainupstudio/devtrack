@@ -22,6 +22,8 @@ pub struct Draft {
     pub project: Option<Id>,
     pub task: Option<Id>,
     pub billable: bool,
+    /// An Azure DevOps work item chosen from the suggestions: it becomes a task on Start.
+    pub remote: Option<String>,
 }
 
 #[derive(Clone)]
@@ -431,6 +433,15 @@ fn session_panel(app: &mut App, ui: &mut egui::Ui) {
             app.geometry.rows.push(("start row · project".into(), ui.min_rect()));
             ui.label(RichText::new("  ·  ").size(13.0).color(c.text2));
             cl = client_select_with(ui, (salt, "client"), &app.store.db, &mut chosen, Trigger::Link);
+            // a work item from Azure DevOps with no project: say it, in words and amber
+            let from_devops = match &running {
+                Some(e) => app.store.db.task(&e.task_id).is_some_and(|t| t.source == SOURCE_AZURE),
+                None => app.today.draft.remote.is_some(),
+            };
+            if from_devops && proj.is_none() {
+                ui.add_space(GROUP_GAP);
+                ui.label(RichText::new(tr("! Choose a project for this work item")).size(13.0).color(c.amber));
+            }
             if let Some(e) = &running {
                 ui.add_space(GROUP_GAP + 8.0);
                 started_link = Some(link_btn(ui, &trf("Started {}", &[&clock_text(e.start, h24)])).on_hover_text(tr("Change when it started")));
@@ -470,10 +481,33 @@ pub enum Suggest {
     /// An existing task: choosing it fills the task and its project (and so the client).
     Task(Id),
     Project(Id),
+    /// An Azure DevOps work item not yet in DevTrack (its number).
+    Remote(String),
+    /// Look a #number up in Azure DevOps.
+    LookUp(String),
+    /// Read the assigned work items again (offered when the list is old or unreachable).
+    Refresh,
 }
 
-/// Previous sessions and projects whose description, task, project or client contain the text.
-fn suggestions(db: &Db, q: &str) -> Vec<Suggest> {
+/// What Azure DevOps adds to the suggestions: work items not yet tasks, a lookup in progress,
+/// and how current the list is.
+#[derive(Default)]
+pub struct RemoteSuggest {
+    pub items: Vec<super::assigned::Item>,
+    pub lookup: Option<(String, super::assigned::Lookup)>,
+    pub status: Option<String>,
+}
+
+impl RemoteSuggest {
+    pub fn of(app: &App) -> Option<RemoteSuggest> {
+        super::assigned::connection(app)?;
+        Some(RemoteSuggest { items: super::assigned::candidates(app), lookup: app.assigned.lookup.clone(), status: app.assigned.status(now_secs()) })
+    }
+}
+
+/// Tasks, then Azure DevOps work items not yet in DevTrack, then projects, matching the text.
+pub(super) fn suggestions(db: &Db, q: &str, remote: Option<&RemoteSuggest>) -> Vec<Suggest> {
+    let raw = q.trim().to_string();
     let q = q.trim().trim_start_matches('#').to_lowercase();
     if q.is_empty() {
         return vec![];
@@ -495,7 +529,20 @@ fn suggestions(db: &Db, q: &str) -> Vec<Suggest> {
         })
         .collect();
     tasks.sort_by_key(|t| (std::cmp::Reverse(last_used.get(t.id.as_str()).copied().unwrap_or(0)), t.title.to_lowercase()));
+    let number_known = tasks.iter().any(|t| t.external_id.as_deref() == Some(q.as_str()));
     let mut out: Vec<Suggest> = tasks.into_iter().take(8).map(|t| Suggest::Task(t.id.clone())).collect();
+    if let Some(r) = remote {
+        let found: Vec<&super::assigned::Item> = r.items.iter().filter(|i| search_matches(&raw, &[&i.title, &i.id, &i.project])).take(5).collect();
+        let number_found = found.iter().any(|i| i.id == q);
+        out.extend(found.into_iter().map(|i| Suggest::Remote(i.id.clone())));
+        // a number nobody here knows: offer to look it up (or say how the lookup went)
+        if q.chars().all(|ch| ch.is_ascii_digit()) && !number_known && !number_found {
+            out.push(Suggest::LookUp(q.clone()));
+        }
+        if r.status.is_some() && out.iter().any(|s| matches!(s, Suggest::Remote(..) | Suggest::LookUp(..))) {
+            out.push(Suggest::Refresh);
+        }
+    }
     let mut projects: Vec<&Project> = db.live_projects().into_iter().filter(|p| !p.archived && format!("{} {}", p.name, db.client_name(p)).to_lowercase().contains(&q)).collect();
     projects.sort_by_key(|p| p.name.to_lowercase());
     out.extend(projects.into_iter().take(4).map(|p| Suggest::Project(p.id.clone())));
@@ -557,6 +604,12 @@ fn description(app: &mut App, ui: &mut egui::Ui, running: Option<&TimeEntry>, wi
                 if app.store.db.task(&app.today.draft.task).is_some_and(|t| t.display() != text) {
                     app.today.draft.task = None;
                 }
+                // the same for a work item chosen from Azure DevOps
+                if let Some(n) = app.today.draft.remote.clone() {
+                    if app.assigned.get(&n).map(|i| i.display()) != Some(text.clone()) {
+                        app.today.draft.remote = None;
+                    }
+                }
             }
             app.today.draft.desc = text.clone();
         }
@@ -569,9 +622,38 @@ fn description(app: &mut App, ui: &mut egui::Ui, running: Option<&TimeEntry>, wi
 /// start (no session running, nothing highlighted). Shared by Today and the compact window.
 pub fn suggest_under(app: &mut App, ui: &mut egui::Ui, r: &egui::Response, rect: egui::Rect, text: &str, running: Option<&TimeEntry>, width: f32) -> bool {
     let text = text.to_string();
-    let (choice, enter_start) = suggest_pick(&app.store.db, ui, "session-suggest", r, rect, &text, running.is_none(), width);
+    let remote = RemoteSuggest::of(app);
+    let (choice, enter_start) = suggest_pick(&app.store.db, remote.as_ref(), ui, "session-suggest", r, rect, &text, running.is_none(), width);
     if let Some(s) = choice {
         match (s, running) {
+            (Suggest::LookUp(n), _) => {
+                super::assigned::look_up(app, &n);
+                r.request_focus();
+            }
+            (Suggest::Refresh, _) => {
+                super::assigned::refresh(app, true);
+                r.request_focus();
+            }
+            (Suggest::Remote(n), Some(e)) => {
+                // while a session runs the choice is made now: the work item becomes its task
+                let dest = e.project_id.clone().or_else(|| app.assigned.get(&n).and_then(|i| super::assigned::likely_project(&app.store.db, &i.project)));
+                if let Some(tid) = super::assigned::import(app, &n, dest) {
+                    let pid = app.store.db.task(&Some(tid.clone())).and_then(|t| t.project_id.clone());
+                    app.store.update_running(|x| { x.task_id = Some(tid.clone()); if pid.is_some() { x.project_id = pid.clone(); } });
+                }
+                app.today.run_desc = None;
+            }
+            (Suggest::Remote(n), None) => {
+                // nothing is imported yet: the draft names the work item and its likely project
+                let item = app.assigned.get(&n).cloned();
+                if app.today.draft.project.is_none() {
+                    app.today.draft.project = item.as_ref().and_then(|i| super::assigned::likely_project(&app.store.db, &i.project));
+                    app.today.draft.billable = app.store.db.project(&app.today.draft.project).map(|p| p.billable_default).unwrap_or(false);
+                }
+                app.today.draft.desc = item.map(|i| i.display()).unwrap_or_default();
+                app.today.draft.task = None;
+                app.today.draft.remote = Some(n);
+            }
             (Suggest::Task(tid), Some(_)) => {
                 let pid = app.store.db.task(&Some(tid.clone())).and_then(|t| t.project_id.clone());
                 app.store.update_running(|x| { x.task_id = Some(tid.clone()); if pid.is_some() { x.project_id = pid.clone(); } });
@@ -607,7 +689,7 @@ pub fn suggest_under(app: &mut App, ui: &mut egui::Ui, r: &egui::Response, rect:
 /// (and so its client) and task at once; a matching project fills the project. `salt` keeps two
 /// fields' lists apart. Returns the choice, and whether Enter asked to start (`can_start`, with
 /// nothing highlighted).
-pub fn suggest_pick(db: &Db, ui: &mut egui::Ui, salt: &str, r: &egui::Response, rect: egui::Rect, text: &str, can_start: bool, width: f32) -> (Option<Suggest>, bool) {
+pub fn suggest_pick(db: &Db, remote: Option<&RemoteSuggest>, ui: &mut egui::Ui, salt: &str, r: &egui::Response, rect: egui::Rect, text: &str, can_start: bool, width: f32) -> (Option<Suggest>, bool) {
     let c = p(ui);
     let text = text.to_string();
     let pop = egui::Id::new(salt);
@@ -618,7 +700,7 @@ pub fn suggest_pick(db: &Db, ui: &mut egui::Ui, salt: &str, r: &egui::Response, 
     }
     let dismissed = ui.data(|d| d.get_temp::<String>(dismissed_id)).is_some_and(|t| t == text);
     let over = ui.data(|d| d.get_temp::<egui::Rect>(pop)).zip(ui.ctx().pointer_latest_pos()).is_some_and(|(pr, pos)| pr.contains(pos));
-    let list = if dismissed || !(r.has_focus() || r.lost_focus() || over) { vec![] } else { suggestions(db, &text) };
+    let list = if dismissed || !(r.has_focus() || r.lost_focus() || over) { vec![] } else { suggestions(db, &text, remote) };
     let mut hl: Option<usize> = ui.data(|d| d.get_temp(hl_id)).flatten();
     let mut choice: Option<Suggest> = None;
     let mut enter_start = false;
@@ -641,14 +723,15 @@ pub fn suggest_pick(db: &Db, ui: &mut egui::Ui, salt: &str, r: &egui::Response, 
             egui::Frame::new().fill(c.raised).stroke(Stroke::new(1.0, c.line)).corner_radius(10.0).inner_margin(egui::Margin::same(6)).shadow(egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(90) }).show(ui, |ui| {
                 ui.set_width(width - 12.0);
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let mut header: Option<bool> = None;
+                let mut header: Option<u8> = None;
                 for (i, s) in list.iter().enumerate() {
-                    let is_task = matches!(s, Suggest::Task(..));
-                    if header != Some(is_task) {
+                    let group = match s { Suggest::Task(..) => 0u8, Suggest::Remote(..) | Suggest::LookUp(..) | Suggest::Refresh => 1, Suggest::Project(..) => 2 };
+                    if header != Some(group) {
                         if header.is_some() { ui.add_space(4.0); }
                         let (hr, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::hover());
-                        ui.painter().text(hr.left_center() + egui::vec2(10.0, 0.0), egui::Align2::LEFT_CENTER, tr(if is_task { "Tasks" } else { "Projects" }), sans(12.0), c.text2);
-                        header = Some(is_task);
+                        let name = match group { 0 => tr("Tasks"), 1 => tr("From Azure DevOps · not in DevTrack yet"), _ => tr("Projects") };
+                        ui.painter().text(hr.left_center() + egui::vec2(10.0, 0.0), egui::Align2::LEFT_CENTER, name, sans(12.0), c.text2);
+                        header = Some(group);
                     }
                     let picked = match s {
                         Suggest::Task(tid) => {
@@ -661,6 +744,35 @@ pub fn suggest_pick(db: &Db, ui: &mut egui::Ui, salt: &str, r: &egui::Response, 
                         Suggest::Project(id) => {
                             let pr = db.project(&Some(id.clone()));
                             pick_row(ui, hl == Some(i), pr.map(|p| hex(&p.color)), &pr.map(|p| p.name.clone()).unwrap_or_default(), &pr.map(|p| db.client_name(p)).unwrap_or_default(), false)
+                        }
+                        Suggest::Remote(n) => {
+                            let it = remote.and_then(|r| r.items.iter().find(|x| &x.id == n));
+                            let dest = it.and_then(|it| super::assigned::likely_project(db, &it.project)).and_then(|p| db.project(&Some(p)).cloned());
+                            let mut sub = vec!["Azure DevOps".to_string()];
+                            if let Some(it) = it {
+                                if !it.project.is_empty() { sub.push(it.project.clone()); }
+                                if !it.status.is_empty() { sub.push(it.status.clone()); }
+                            }
+                            sub.push(match &dest { Some(p) => trf_m!("goes to “{}”", truncate(&p.name, 28)), None => tr("no project yet") });
+                            pick_row(ui, hl == Some(i), dest.as_ref().map(|p| hex(&p.color)), &it.map(|i| i.display()).unwrap_or_default(), &sub.join(" · "), false)
+                        }
+                        Suggest::LookUp(n) => {
+                            use super::assigned::Lookup;
+                            let state = remote.and_then(|r| r.lookup.as_ref()).filter(|(x, _)| x == n).map(|(_, st)| st.clone());
+                            let (title, sub) = match &state {
+                                Some(Lookup::Searching) => (trf_m!("Looking up #{}…", n), tr("Reading Azure DevOps")),
+                                Some(Lookup::NotFound) => (trf_m!("#{} isn't in Azure DevOps", n), tr("Or you can't see it with this connection")),
+                                Some(Lookup::Failed(m)) => (trf_m!("#{} couldn't be read", n), m.clone()),
+                                _ => (trf_m!("Look up #{} in Azure DevOps", n), tr("Not assigned to you, or not read yet")),
+                            };
+                            let p = pick_row(ui, hl == Some(i), None, &title, &sub, false);
+                            // only the offer acts: a lookup under way or done says where it stands
+                            p && !matches!(state, Some(Lookup::Searching) | Some(Lookup::NotFound))
+                        }
+                        Suggest::Refresh => {
+                            // how current the list is, said in words (and amber), with the way to fix it
+                            let st = remote.and_then(|r| r.status.clone()).unwrap_or_default();
+                            pick_row(ui, hl == Some(i), Some(c.amber), &st, &tr("Read the work items assigned to you again"), false)
                         }
                     };
                     if picked { choice = Some(s.clone()); }
@@ -675,7 +787,13 @@ pub fn suggest_pick(db: &Db, ui: &mut egui::Ui, salt: &str, r: &egui::Response, 
 
     if let Some(s) = &choice {
         // the list closes on what was chosen and stays closed until the text changes again
-        let shown = match s { Suggest::Task(id) => db.task(&Some(id.clone())).map(|t| t.display()).unwrap_or_default(), Suggest::Project(_) => text.clone() };
+        let shown = match s {
+            Suggest::Task(id) => db.task(&Some(id.clone())).map(|t| t.display()).unwrap_or_default(),
+            Suggest::Remote(n) => remote.and_then(|r| r.items.iter().find(|x| &x.id == n)).map(|i| i.display()).unwrap_or_default(),
+            // a lookup keeps the list open: its result shows in it
+            Suggest::LookUp(_) | Suggest::Refresh => String::from("\u{0}"),
+            Suggest::Project(_) => text.clone(),
+        };
         ui.data_mut(|d| { d.remove::<egui::Rect>(pop); d.insert_temp(hl_id, None::<usize>); d.insert_temp(dismissed_id, shown); });
     }
     (choice, enter_start)
@@ -2445,15 +2563,15 @@ mod session_panel_tests {
         let app = demo();
         let pr = app.store.db.live_projects().into_iter().next().cloned().expect("a demo project");
         let q = pr.name[..3.min(pr.name.len())].to_string();
-        let list = suggestions(&app.store.db, &q);
+        let list = suggestions(&app.store.db, &q, None);
         assert!(!list.is_empty(), "typing part of a project name suggests something");
         let mut keys = vec![];
         for s in &list {
-            let k = match s { Suggest::Task(id) => format!("t:{id}"), Suggest::Project(id) => format!("p:{id}") };
+            let k = match s { Suggest::Task(id) => format!("t:{id}"), Suggest::Project(id) => format!("p:{id}"), Suggest::Remote(n) => format!("r:{n}"), Suggest::LookUp(n) => format!("l:{n}"), Suggest::Refresh => "refresh".into() };
             assert!(!keys.contains(&k), "duplicate suggestion");
             keys.push(k);
         }
-        assert!(suggestions(&app.store.db, "   ").is_empty());
+        assert!(suggestions(&app.store.db, "   ", None).is_empty());
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! review-picture options.
 
 mod activities;
+mod assigned;
 mod compact;
 mod dest;
 mod gallery;
@@ -195,6 +196,10 @@ pub struct App {
     pub settings: settings::SettingsState,
     pub compact_ui: compact::CompactState,
     pub jobs: jobs::Jobs,
+    /// Work items assigned to you in Azure DevOps, ready for the task field.
+    pub assigned: assigned::Assigned,
+    /// When the list was last asked for, so a failing connection is not asked every frame.
+    pub assigned_tried: Option<i64>,
     pub conn_msgs: BTreeMap<Id, (bool, String)>,
     pub sync: SyncState,
     next_sync: Instant,
@@ -336,6 +341,8 @@ impl App {
             settings: settings::SettingsState::from(&store),
             compact_ui: compact::CompactState::default(),
             jobs: jobs::Jobs::default(),
+            assigned: assigned::Assigned::load(&store),
+            assigned_tried: None,
             conn_msgs: BTreeMap::new(),
             sync: SyncState::default(),
             page: Page::Today,
@@ -512,6 +519,22 @@ impl App {
                 self.act.open_root(activities::ActTab::Clients);
                 self.act.open_client_edit(activities::ClientEdit::New(String::new()));
                 Page::Activities
+            }
+            // the task field with Azure DevOps work items not yet in DevTrack
+            "timer-devops" => {
+                if !self.store.is_persistent() {
+                    let mut cfg = IntegrationConfig { id: "demo-azure".into(), kind: devtrack_core::model::SOURCE_AZURE.into(), name: "Azure DevOps · contoso".into(), enabled: true, ..Default::default() };
+                    cfg.settings.insert("organization".into(), "contoso".into());
+                    self.store.db.integrations.insert(cfg.id.clone(), cfg);
+                    let item = |id: &str, title: &str, project: &str| assigned::Item { id: id.into(), title: title.into(), status: "Active".into(), kind: "Task".into(), project: project.into(), url: String::new(), estimate: None };
+                    self.assigned.cfg = Some("demo-azure".into());
+                    self.assigned.at = Some(now_secs() - 2 * 3600);
+                    self.assigned.items = vec![item("7001", "Invoice PDF layout", "Portal"), item("7002", "Invoice reminders by email", "Billing"), item("7003", "Invoice archive export", "Elsewhere")];
+                    if let Some(e) = self.store.db.running().cloned() { let _ = e; self.store.stop(); }
+                    self.today.draft.desc = "invoice".into();
+                    self.today.focus_desc = true;
+                }
+                Page::Today
             }
             // the Tasks tab with the most tracked task open in place: estimate, sessions
             "tasks-open" => {
@@ -1191,11 +1214,15 @@ impl App {
         let p = p.or_else(|| self.store.db.settings.default_project.clone().filter(|id| self.store.db.projects.get(id).is_some_and(|x| !x.deleted && !x.archived)));
         let b = b || (d.project.is_none() && p.as_ref().and_then(|id| self.store.db.projects.get(id)).is_some_and(|x| x.billable_default));
         // the name typed is the task, not a note: an existing task of the project or a new one
-        let t = match t {
-            Some(t) => Some(t),
-            None if !desc.trim().is_empty() => Some(self.task_named(p.clone(), &desc)),
-            None => None,
+        let t = match (t, &d.remote) {
+            (Some(t), _) => Some(t),
+            // a work item chosen from Azure DevOps becomes its task now, in the session's project
+            (None, Some(n)) => assigned::import(self, n, p.clone()).or_else(|| Some(self.task_named(p.clone(), &desc))),
+            (None, None) if !desc.trim().is_empty() => Some(self.task_named(p.clone(), &desc)),
+            (None, None) => None,
         };
+        // an imported work item that already had a project keeps it
+        let p = p.or_else(|| self.store.db.task(&t).and_then(|x| x.project_id.clone()));
         self.store.start("", p, t, b);
         self.today.draft = today::Draft::default();
     }
@@ -1219,6 +1246,8 @@ impl App {
     fn handle_job(&mut self, out: jobs::JobOut) {
         use jobs::JobOut::*;
         match out {
+            // read in the background for the task field (assigned.rs)
+            Assigned { .. } | Lookup { .. } => {}
             Test { cfg, res } => {
                 let v = match res {
                     Ok(m) => (true, m),
@@ -1939,6 +1968,11 @@ impl eframe::App for App {
         self.narrow = self.mode == WinMode::Full && ctx.screen_rect().width() < 760.0;
         self.rail = self.narrow || (self.mode == WinMode::Full && self.store.local.sidebar_collapsed);
         self.maybe_sync();
+        // the assigned work items: read again when Today (or the compact window) shows them
+        assigned::poll(self);
+        if self.mode == WinMode::Compact || self.page == Page::Today {
+            assigned::refresh(self, false);
+        }
         if let Some(out) = self.jobs.poll() {
             self.handle_job(out);
         }

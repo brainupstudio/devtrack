@@ -14,6 +14,10 @@ pub enum JobOut {
     More { cfg: Id, res: SResult<Vec<RemoteItem>> },
     /// Refresh of imported tasks: which ids were asked for and what came back.
     Refresh { cfg: Id, asked: Vec<String>, res: SResult<Vec<RemoteItem>> },
+    /// The work items assigned to you, for the task field's suggestions.
+    Assigned { cfg: Id, res: SResult<Vec<RemoteItem>> },
+    /// One work item asked for by its number.
+    Lookup { number: String, res: SResult<Vec<RemoteItem>> },
     /// Read-only work detail of one imported task (remaining, completed, last updates).
     Detail { task: Id, res: SResult<RemoteDetail> },
 }

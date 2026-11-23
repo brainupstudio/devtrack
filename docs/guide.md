@@ -18,8 +18,14 @@ running there, and **Quit DevTrack** in its menu (or ⌘Q) ends it.
 ## Today
 
 **The timer.** Type what you are working on in the task field. DevTrack suggests open tasks
-(the most recent first) and Azure DevOps work items with their project and client; a name that
-matches no task becomes a new task when you press **Start**. Under the field, the project and
+(the most recent first), then the Azure DevOps work items assigned to you that are not in
+DevTrack yet, then projects; a name that matches no task becomes a new task when you press
+**Start**. A work item becomes a task only when its session starts, in the project its
+neighbours went to (or the one you chose); with no project to go to, the timer says so in amber
+and you can choose one at any time. The assigned work items are read in the background and kept
+on this computer, so they are there at once and offline; when the list is old or Azure DevOps
+can't be reached, the suggestions say so and offer to read it again. A **#number** that is not
+in the list can be looked up from the suggestions. Under the field, the project and
 the client are underlined: click either to choose it from a searchable list, or create a new
 one by typing its name. Choosing a client first narrows the projects to its own.
 
