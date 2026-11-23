@@ -2840,12 +2840,13 @@ fn compact_edit_window(app: &mut App, ctx: &egui::Context, ed: &mut Edit) -> boo
     let outer_w = w + 24.0;
     let info = ctx.input(|i| i.viewport().clone());
     let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) else { return compact_edit_popover(app, ctx, ed) };
-    let mon = info.monitor_size.unwrap_or(egui::vec2(f32::INFINITY, f32::INFINITY));
+    // the screen the compact window is on, wherever it sits among side-by-side screens
+    let screen = super::monitors::screen_at(outer.center(), info.monitor_size).unwrap_or(egui::Rect::EVERYTHING);
     let h_id = egui::Id::new("compact-edit-h");
     let h: f32 = ctx.data(|d| d.get_temp(h_id)).unwrap_or(440.0);
-    let x = if outer.right() + 8.0 + outer_w <= mon.x { outer.right() + 8.0 } else { (outer.left() - 8.0 - outer_w).max(0.0) };
+    let x = super::monitors::side_x(outer, outer_w, 8.0, screen);
     let anchor = app.today.edit_anchor.unwrap_or(egui::Rect::from_min_size(egui::pos2(0.0, 120.0), egui::vec2(10.0, 10.0)));
-    let y = (inner.top() + anchor.top() - 12.0).min(mon.y - h - 8.0).max(outer.top());
+    let y = (inner.top() + anchor.top() - 12.0).min(screen.bottom() - h - 8.0).max(outer.top()).max(screen.top());
     let builder = egui::ViewportBuilder::default()
         .with_title(tr("Edit session"))
         .with_position(egui::pos2(x, y))

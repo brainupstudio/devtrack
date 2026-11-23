@@ -10,6 +10,7 @@ mod gallery;
 pub mod i18n;
 mod i18n_it;
 mod jobs;
+mod monitors;
 mod period;
 mod report_time;
 mod settings;
