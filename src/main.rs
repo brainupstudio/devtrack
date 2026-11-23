@@ -8,6 +8,8 @@
 //! `--demo` opens a separate copy filled with sample data, `--test` a separate copy that starts
 //! empty; neither touches the real data.
 //! `--background` starts with the window hidden (macOS, used when opening at login).
+//! `mcp` (first argument) runs no window: an MCP server on stdio for AI assistants, read only;
+//! `--data-dir <folder>` or `--demo` picks the data it reads.
 //! `--rail` collapses the sidebar to its icons for those pictures.
 //! `--lang en|it` picks the interface language, `--compact` starts in the compact window, `--reduce-motion` turns the fade off,
 //! `--transition-log <file.csv>` records one page transition frame by frame and
@@ -30,6 +32,20 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    // `devtrack mcp`: no window; an AI assistant reads the data through MCP on stdin and stdout
+    // (read only). `--data-dir <folder>` reads another folder, `--demo` the sample copy.
+    if args.get(1).is_some_and(|a| a == "mcp") {
+        let dir = match arg(&args, "--data-dir") {
+            Some(d) => std::path::PathBuf::from(d),
+            None if args.iter().any(|a| a == "--demo") => devtrack_core::store::default_dir().with_file_name("DevTrack Demo"),
+            None => devtrack_core::store::default_dir(),
+        };
+        if let Err(e) = devtrack_core::mcp::serve_stdio(devtrack_core::mcp::Source::folder(dir)) {
+            eprintln!("devtrack mcp: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let shot_path = arg(&args, "--screenshot").map(std::path::PathBuf::from);
     let shooting = shot_path.is_some();
     let state = arg(&args, "--state").and_then(|s| DemoState::parse(&s));

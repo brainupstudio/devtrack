@@ -4,7 +4,10 @@
 //! can reuse this library unchanged. Nothing in here depends on egui.
 
 pub mod edit;
+pub mod facts;
 pub mod integrations;
+pub mod mcp;
+pub mod mcp_azure;
 pub mod model;
 pub mod report;
 pub mod sample;

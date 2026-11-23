@@ -82,6 +82,14 @@ pub struct LocalConfig {
     /// The latest published version, as of that check.
     #[serde(default)]
     pub update_latest: Option<String>,
+    /// AI assistants may read DevTrack's data through `devtrack mcp` (read only). Off until
+    /// the person turns it on, on this device only.
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    /// They may also read Azure DevOps work items: the assigned list the app keeps, and one
+    /// work item at a time, live, with the token in the keychain. Off until turned on.
+    #[serde(default)]
+    pub mcp_azure: bool,
 }
 
 fn default_true() -> bool {
@@ -112,6 +120,8 @@ impl Default for LocalConfig {
             update_check: true,
             update_checked_ms: 0,
             update_latest: None,
+            mcp_enabled: false,
+            mcp_azure: false,
         }
     }
 }
