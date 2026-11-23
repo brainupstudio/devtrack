@@ -1,20 +1,19 @@
-## DevTrack 0.1.12
+## DevTrack 0.1.13
 
 ### Novità
-- **Finestra compatta, giorno sempre visibile:** scorrendo le sessioni recenti, la fascia del giorno che stai guardando resta in alto finché la fascia del giorno dopo non prende il suo posto.
+- **Nuovo logo:** un quadrante con due anelli e un pallino, accanto al nome DevTrack. Cambiano anche l'icona dell'app e quella nella barra dei menu.
+- **Logo in movimento:** mentre una sessione è in corso, il pallino gira intorno all'anello. Con "Riduci movimento" attivo il logo resta fermo.
 
 ### Correzioni
-- **Password del portachiavi su macOS:** DevTrack legge il token di Azure DevOps una sola volta per avvio, invece di chiederlo di continuo, e ora è firmato sempre con lo stesso certificato. Al primo avvio di questa versione macOS chiede la password un'ultima volta: scegli "Consenti sempre" e con i prossimi aggiornamenti non dovrebbe più chiederla.
-- **Due monitor affiancati:** la finestrella di modifica della finestra compatta si apre a destra, sullo stesso monitor, e non più a cavallo dei due monitor.
-- **Passare tra finestra compatta e completa:** la finestra resta dov'è, sullo stesso monitor, invece di tornare dov'era l'ultima volta.
-- **Trascinare la finestra:** due trascinamenti veloci non vengono più presi per un doppio clic che allarga la finestra. Nella finestra compatta il doppio clic non la allarga più.
+- **Suggerimenti della descrizione:** i nomi lunghi di attività, progetti e work item di Azure DevOps non escono più dall'elenco, ma finiscono con "…".
+- **Finestra compatta:** scorrendo, le sessioni arrivano fino alla linea in fondo, senza più una fascia vuota dove il testo veniva tagliato.
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.12-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.12-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.12-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.13-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.13-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.13-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -33,6 +32,17 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.12
+
+### Novità
+- **Finestra compatta, giorno sempre visibile:** scorrendo le sessioni recenti, la fascia del giorno che stai guardando resta in alto finché la fascia del giorno dopo non prende il suo posto.
+
+### Correzioni
+- **Password del portachiavi su macOS:** DevTrack legge il token di Azure DevOps una sola volta per avvio, invece di chiederlo di continuo, e ora è firmato sempre con lo stesso certificato. Al primo avvio di questa versione macOS chiede la password un'ultima volta: scegli "Consenti sempre" e con i prossimi aggiornamenti non dovrebbe più chiederla.
+- **Due monitor affiancati:** la finestrella di modifica della finestra compatta si apre a destra, sullo stesso monitor, e non più a cavallo dei due monitor.
+- **Passare tra finestra compatta e completa:** la finestra resta dov'è, sullo stesso monitor, invece di tornare dov'era l'ultima volta.
+- **Trascinare la finestra:** due trascinamenti veloci non vengono più presi per un doppio clic che allarga la finestra. Nella finestra compatta il doppio clic non la allarga più.
 
 ## DevTrack 0.1.11
 
