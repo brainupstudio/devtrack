@@ -204,6 +204,8 @@ pub struct App {
     pub assigned: assigned::Assigned,
     /// When the list was last asked for, so a failing connection is not asked every frame.
     pub assigned_tried: Option<i64>,
+    /// Review pictures: open the period picker once.
+    pub preview_period_picker: bool,
     pub conn_msgs: BTreeMap<Id, (bool, String)>,
     pub sync: SyncState,
     next_sync: Instant,
@@ -347,6 +349,7 @@ impl App {
             jobs: jobs::Jobs::default(),
             assigned: assigned::Assigned::load(&store),
             assigned_tried: None,
+            preview_period_picker: false,
             conn_msgs: BTreeMap::new(),
             sync: SyncState::default(),
             page: Page::Today,
@@ -792,6 +795,15 @@ impl App {
             "timer-project" => {
                 // the timer's project menu, open (review pictures only)
                 widgets::SHOT_OPEN_PROJECT.store(true, std::sync::atomic::Ordering::Relaxed);
+                Page::Today
+            }
+            // the period field's picker open: a day, a week
+            "period-picker" | "period-picker-week" => {
+                self.today.timesheet = name == "period-picker-week";
+                let monday = self.store.db.settings.week_starts_monday;
+                let kind = if name == "period-picker-week" { PeriodKind::Week } else { PeriodKind::Day };
+                self.today.period = Period::containing(kind, today_date(), monday);
+                self.preview_period_picker = true;
                 Page::Today
             }
             // the dialog over another page, as the top bar opens it from anywhere
@@ -2008,6 +2020,9 @@ impl eframe::App for App {
         self.narrow = self.mode == WinMode::Full && ctx.screen_rect().width() < 760.0;
         self.rail = self.narrow || (self.mode == WinMode::Full && self.store.local.sidebar_collapsed);
         self.maybe_sync();
+        if std::mem::take(&mut self.preview_period_picker) {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("preview-open-period-picker"), true));
+        }
         // the assigned work items: read again when the task field (Today, the compact window) or
         // a session dialog shows them
         assigned::poll(self);

@@ -542,7 +542,7 @@ pub fn notice<R>(ui: &mut Ui, color: Color32, add: impl FnOnce(&mut Ui) -> R) ->
 /// filled; Today jumps to the current date. Choosing a day writes the text and closes it; Escape
 /// or a click outside closes it too. The returned response reports the change like typing does.
 pub fn date_input(ui: &mut Ui, value: &mut String, name: &str, width: f32, invalid: bool, monday: bool) -> egui::Response {
-    use chrono::{Datelike, Duration, NaiveDate};
+    use chrono::{Datelike, NaiveDate};
     let c = p(ui);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CTRL_H), Sense::hover());
     ui.data_mut(|d| d.insert_temp(egui::Id::new("last-input-rect"), rect));
@@ -583,57 +583,7 @@ pub fn date_input(ui: &mut Ui, value: &mut String, name: &str, width: f32, inval
             egui::Frame::new().fill(c.raised).stroke(Stroke::new(1.0, c.border)).corner_radius(8.0).inner_margin(egui::Margin::same(10)).shadow(egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(80) }).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
                 ui.set_width(cell.x * 7.0);
-                ui.horizontal(|ui| {
-                    if icon_ghost(ui, Glyph::Prev, "Previous month").clicked() {
-                        first = (first - Duration::days(1)).with_day(1).unwrap_or(first);
-                    }
-                    let title = format!("{} {}", super::i18n::month(first.month()), first.year());
-                    let (tr_rect, _) = ui.allocate_exact_size(egui::vec2(cell.x * 5.0, CTRL_H), Sense::hover());
-                    ui.painter().text(tr_rect.center(), egui::Align2::CENTER_CENTER, title, medium(14.0), c.text);
-                    if icon_ghost(ui, Glyph::Next, "Next month").clicked() {
-                        first = (first + Duration::days(32)).with_day(1).unwrap_or(first);
-                    }
-                });
-                let names: [&str; 7] = match super::i18n::lang() {
-                    super::i18n::Lang::It => ["Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do"],
-                    super::i18n::Lang::En => ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
-                };
-                let order: Vec<usize> = if monday { (0..7).collect() } else { std::iter::once(6).chain(0..6).collect() };
-                ui.horizontal(|ui| {
-                    for i in &order {
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(cell.x, 20.0), Sense::hover());
-                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, names[*i], sans(12.0), c.text2);
-                    }
-                });
-                let lead = if monday { first.weekday().num_days_from_monday() } else { first.weekday().num_days_from_sunday() } as i64;
-                let start = first - Duration::days(lead);
-                let mut picked: Option<NaiveDate> = None;
-                for w in 0..6 {
-                    ui.horizontal(|ui| {
-                        for d in 0..7 {
-                            let day = start + Duration::days(w * 7 + d);
-                            let (r, rr) = ui.allocate_exact_size(cell, Sense::click());
-                            let inside = day.month() == first.month();
-                            let sel = Some(day) == parsed;
-                            let r2 = r.shrink2(egui::vec2(2.0, 1.0));
-                            if sel {
-                                ui.painter().rect_filled(r2, 4.0, c.primary);
-                            } else if rr.hovered() {
-                                ui.painter().rect_filled(r2, 4.0, c.hover);
-                            }
-                            if day == today && !sel {
-                                ui.painter().rect_stroke(r2, 4.0, Stroke::new(1.0, c.text2), egui::StrokeKind::Inside);
-                            }
-                            let col = if sel { c.on_primary } else if inside { c.text } else { c.text2.linear_multiply(0.55) };
-                            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, day.day().to_string(), mono_font(13.0), col);
-                            let label = day.format("%Y-%m-%d").to_string();
-                            rr.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, label.clone()));
-                            if rr.clicked() {
-                                picked = Some(day);
-                            }
-                        }
-                    });
-                }
+                let mut picked = month_grid(ui, &mut first, parsed.map(|d| (d, d)), today, monday, cell);
                 ui.add_space(2.0);
                 if link_btn(ui, "Today").clicked() {
                     picked = Some(today);
@@ -2537,4 +2487,113 @@ pub fn field_info<R>(ui: &mut Ui, label_txt: &str, info: &str, add: impl FnOnce(
         add(ui)
     })
     .inner
+}
+
+
+/// A month to pick a day from: ‹ month year ›, weekday initials in the user's week order, then
+/// six weeks. `range` (first and last day, inclusive) is the current choice: one day is filled,
+/// a longer span (a week, a month) is tinted so the period shows as one block. Today is outlined.
+/// `first` is the month shown (its first day) and moves with ‹ ›. Returns the day clicked.
+pub fn month_grid(ui: &mut Ui, first: &mut chrono::NaiveDate, range: Option<(chrono::NaiveDate, chrono::NaiveDate)>, today: chrono::NaiveDate, monday: bool, cell: egui::Vec2) -> Option<chrono::NaiveDate> {
+    use chrono::{Datelike, Duration};
+    let c = p(ui);
+    ui.horizontal(|ui| {
+        if icon_ghost(ui, Glyph::Prev, "Previous month").clicked() {
+            *first = (*first - Duration::days(1)).with_day(1).unwrap_or(*first);
+        }
+        let title = format!("{} {}", super::i18n::month(first.month()), first.year());
+        let (tr_rect, _) = ui.allocate_exact_size(egui::vec2(cell.x * 7.0 - CTRL_H * 2.0, CTRL_H), Sense::hover());
+        ui.painter().text(tr_rect.center(), egui::Align2::CENTER_CENTER, title, medium(14.0), c.text);
+        if icon_ghost(ui, Glyph::Next, "Next month").clicked() {
+            *first = (*first + Duration::days(32)).with_day(1).unwrap_or(*first);
+        }
+    });
+    let names: [&str; 7] = match super::i18n::lang() {
+        super::i18n::Lang::It => ["Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do"],
+        super::i18n::Lang::En => ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+    };
+    let order: Vec<usize> = if monday { (0..7).collect() } else { std::iter::once(6).chain(0..6).collect() };
+    ui.horizontal(|ui| {
+        for i in &order {
+            let (r, _) = ui.allocate_exact_size(egui::vec2(cell.x, 20.0), Sense::hover());
+            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, names[*i], sans(12.0), c.text2);
+        }
+    });
+    let lead = if monday { first.weekday().num_days_from_monday() } else { first.weekday().num_days_from_sunday() } as i64;
+    let start = *first - Duration::days(lead);
+    let single = range.is_some_and(|(a, b)| a == b);
+    let mut picked = None;
+    for w in 0..6 {
+        ui.horizontal(|ui| {
+            for d in 0..7 {
+                let day = start + Duration::days(w * 7 + d);
+                let (r, rr) = ui.allocate_exact_size(cell, Sense::click());
+                let inside = day.month() == first.month();
+                let in_range = range.is_some_and(|(a, b)| day >= a && day <= b);
+                let filled = in_range && single;
+                let r2 = r.shrink2(egui::vec2(2.0, 1.0));
+                if filled {
+                    ui.painter().rect_filled(r2, 4.0, c.primary);
+                } else if in_range {
+                    // a span reads as one block: the cells touch, rounded only at its two ends
+                    let round = egui::CornerRadius { nw: if Some(day) == range.map(|x| x.0) || d == 0 { 4 } else { 0 }, sw: if Some(day) == range.map(|x| x.0) || d == 0 { 4 } else { 0 }, ne: if Some(day) == range.map(|x| x.1) || d == 6 { 4 } else { 0 }, se: if Some(day) == range.map(|x| x.1) || d == 6 { 4 } else { 0 } };
+                    ui.painter().rect_filled(r.shrink2(egui::vec2(0.0, 1.0)), round, if rr.hovered() { c.hover } else { c.selected });
+                } else if rr.hovered() {
+                    ui.painter().rect_filled(r2, 4.0, c.hover);
+                }
+                if day == today && !filled {
+                    ui.painter().rect_stroke(r2, 4.0, Stroke::new(1.0, c.text2), egui::StrokeKind::Inside);
+                }
+                let col = if filled { c.on_primary } else if inside { c.text } else { c.text2.linear_multiply(0.55) };
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, day.day().to_string(), mono_font(13.0), col);
+                let label = day.format("%Y-%m-%d").to_string();
+                rr.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, in_range, label.clone()));
+                if rr.clicked() {
+                    picked = Some(day);
+                }
+            }
+        });
+    }
+    picked
+}
+
+/// A date as people type it: 23/11/2026, 23/11 (this year), 23.11.2026, 23-11-2026, 2026-11-23,
+/// 3/1/26. None when it is not a real day.
+pub fn parse_user_date(s: &str, this_year: i32) -> Option<chrono::NaiveDate> {
+    use chrono::NaiveDate;
+    let t = s.trim();
+    if let Ok(d) = NaiveDate::parse_from_str(t, "%Y-%m-%d") {
+        return Some(d);
+    }
+    let parts: Vec<&str> = t.split(|ch| ch == '/' || ch == '.' || ch == '-').filter(|x| !x.is_empty()).collect();
+    let num = |x: &str| x.trim().parse::<i32>().ok();
+    match parts.as_slice() {
+        [d, m] => NaiveDate::from_ymd_opt(this_year, num(m)? as u32, num(d)? as u32),
+        [d, m, y] => {
+            let y = num(y)?;
+            let y = if y < 100 { 2000 + y } else { y };
+            NaiveDate::from_ymd_opt(y, num(m)? as u32, num(d)? as u32)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod user_date_tests {
+    use super::parse_user_date;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn dates_as_people_type_them() {
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd);
+        assert_eq!(parse_user_date("23/11/2026", 2026), d(2026, 11, 23));
+        assert_eq!(parse_user_date(" 3/1/27 ", 2026), d(2027, 1, 3));
+        assert_eq!(parse_user_date("23.11.2026", 2026), d(2026, 11, 23));
+        assert_eq!(parse_user_date("23-11-2026", 2026), d(2026, 11, 23));
+        assert_eq!(parse_user_date("2026-11-23", 2025), d(2026, 11, 23));
+        assert_eq!(parse_user_date("23/11", 2026), d(2026, 11, 23));
+        assert_eq!(parse_user_date("31/02/2026", 2026), None, "not a real day");
+        assert_eq!(parse_user_date("tomorrow", 2026), None);
+        assert_eq!(parse_user_date("", 2026), None);
+    }
 }

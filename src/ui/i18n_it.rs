@@ -1282,4 +1282,7 @@ pub static IT: &[(&str, &str)] = &[
     ("Copies last week's hours into {} empty cell, project by project. Only empty cells up to today: filled cells and closed days stay as they are.", "Copia le ore della settimana scorsa in {} cella vuota, progetto per progetto. Solo le celle vuote fino a oggi: le celle già compilate e i giorni chiusi restano come sono."),
     ("Copies last week's hours into {} empty cells, project by project. Only empty cells up to today: filled cells and closed days stay as they are.", "Copia le ore della settimana scorsa in {} celle vuote, progetto per progetto. Solo le celle vuote fino a oggi: le celle già compilate e i giorni chiusi restano come sono."),
     ("Remove this row", "Togli questa riga"),
+    ("Go to date", "Vai alla data"),
+    ("Not a date: type it as 23/11/2026, 23/11 or 2026-11-23.", "Non è una data: scrivila come 23/11/2026, 23/11 o 2026-11-23."),
+    ("Click to type a date or pick it on the calendar", "Clic per scrivere una data o sceglierla dal calendario"),
 ];

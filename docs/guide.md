@@ -33,7 +33,8 @@ While a session runs: **Pause**, **Stop**, and **…** for more. **Started hh:mm
 changes when it started.
 
 **The period.** Go back and forth with the arrows, return with **Today**, and switch between
-**Day**, **Week** and **Month**. On the right, three views:
+**Day**, **Week** and **Month**. Click the date between the arrows to type one (23/11/2026, 23/11,
+2026-11-23) or pick it on a small calendar: the view jumps there and keeps Day, Week or Month. On the right, three views:
 
 - **List**: every session with its time and duration; ⇄ shows the value for each platform,
   ▷ starts it again, **…** edits, duplicates or deletes it.

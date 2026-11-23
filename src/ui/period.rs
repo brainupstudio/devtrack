@@ -158,13 +158,28 @@ pub fn period_toolbar(ui: &mut Ui, period: &mut Period, monday: bool, kinds_enab
     let nav = |ui: &mut Ui, bar: &mut PeriodBar, new_p: &mut Period| {
         let prev = icon_button(ui, Glyph::Prev, "Previous period");
         ui.add_space(GAP);
-        let (lr, lresp) = ui.allocate_exact_size(egui::vec2(label_w, CTRL_H), Sense::hover());
-        ui.painter().rect(lr, RADIUS, c.field, Stroke::new(1.0, c.border), egui::StrokeKind::Inside);
+        // a field that looks like one acts like one: a click (or Enter / Space) opens the picker
+        let (lr, lresp) = ui.allocate_exact_size(egui::vec2(label_w, CTRL_H), Sense::click());
+        let picker = ui.id().with("period-picker");
+        let open = ui.data(|d| d.get_temp::<bool>(picker)).unwrap_or(false);
+        let hot = lresp.hovered() || open;
+        ui.painter().rect(lr, RADIUS, c.field, Stroke::new(1.0, if hot { c.text2 } else { c.border }), egui::StrokeKind::Inside);
+        if lresp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if lresp.has_focus() {
+            focus_ring(ui, lr);
+        }
+        // the calendar mark at the right, as on the date fields of the dialogs
+        let glyph_w = if label_w >= LABEL_MIN_W { 24.0 } else { 0.0 };
+        if glyph_w > 0.0 {
+            draw_glyph(ui.painter(), egui::pos2(lr.right() - PAD_X - 8.0, lr.center().y), Glyph::Calendar, if hot { c.text } else { c.text2 });
+        }
         // Mono numbers, Sans words; the Sans part is dropped (tooltip keeps it) when it can't fit
         let gi = ui.painter().layout_no_wrap(iso.clone(), mono_font(14.0), c.text);
         let ge = ui.painter().layout_no_wrap(extra.clone(), sans(13.0), c.text2);
         let x0 = lr.left() + PAD_X;
-        let room = lr.width() - PAD_X * 2.0;
+        let room = lr.width() - PAD_X * 2.0 - glyph_w;
         if gi.size().x <= room {
             let wi = gi.size().x;
             ui.painter().galley(egui::pos2(x0, lr.center().y - gi.size().y / 2.0), gi, c.text);
@@ -180,9 +195,15 @@ pub fn period_toolbar(ui: &mut Ui, period: &mut Period, monday: bool, kinds_enab
             let g = ui.painter().layout_no_wrap(short, mono_font(14.0), c.text);
             ui.painter().galley(egui::pos2(x0, lr.center().y - g.size().y / 2.0), g, c.text);
         }
-        let full2 = full.clone();
-        lresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, full2.clone()));
-        lresp.on_hover_text(full.clone());
+        let full2 = format!("{} · {}", full, tr("Choose a date"));
+        lresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, full2.clone()));
+        // review pictures open the picker without a click
+        let preview = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::new("preview-open-period-picker"))).unwrap_or(false);
+        let clicked = lresp.clicked() || preview;
+        lresp.on_hover_text(format!("{}\n{}", full, tr("Click to type a date or pick it on the calendar")));
+        if let Some(day) = period_picker(ui, picker, lr, clicked, period, monday) {
+            *new_p = Period::containing(period.kind, day, monday);
+        }
         ui.add_space(GAP);
         let next = icon_button(ui, Glyph::Next, "Next period");
         if prev.clicked() {
@@ -305,4 +326,104 @@ mod tests {
             }
         }
     }
+}
+
+
+/// The period field's picker, under the field: a date to type (23/11/2026, 23/11, 2026-11-23),
+/// already selected so typing replaces it, and the month with the current period marked (a day,
+/// its week or its month). Enter or a day jumps there in the same Day/Week/Month; Today and
+/// Esc as everywhere. Returns the day chosen.
+fn period_picker(ui: &mut Ui, id: egui::Id, field: Rect, toggle: bool, period: &Period, monday: bool) -> Option<chrono::NaiveDate> {
+    use chrono::NaiveDate;
+    let c = p(ui);
+    let open_id = id;
+    let text_id = id.with("text");
+    let month_id = id.with("month");
+    let fresh_id = id.with("fresh");
+    let err_id = id.with("error");
+    let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    let today = today();
+    if toggle {
+        open = !open;
+        if open {
+            // the field's own date, ready to be typed over; the month it falls in
+            let shown = if period.contains(today) && period.kind != PeriodKind::Day { today } else { period.start };
+            ui.data_mut(|d| {
+                d.insert_temp(text_id, short_date(shown));
+                d.insert_temp(month_id, shown.with_day(1).unwrap_or(shown));
+                d.insert_temp(fresh_id, true);
+                d.insert_temp(err_id, false);
+            });
+        }
+    }
+    if !open {
+        ui.data_mut(|d| d.insert_temp(open_id, false));
+        return None;
+    }
+    let mut text: String = ui.data(|d| d.get_temp(text_id)).unwrap_or_default();
+    let mut first: NaiveDate = ui.data(|d| d.get_temp(month_id)).unwrap_or(period.start);
+    let fresh = ui.data_mut(|d| d.remove_temp::<bool>(fresh_id)).unwrap_or(false);
+    let mut error = ui.data(|d| d.get_temp::<bool>(err_id)).unwrap_or(false);
+    let last = period.end - Duration::days(1);
+    let cell = egui::vec2(36.0, 32.0);
+    let width = cell.x * 7.0;
+    let popup_h = 10.0 * 2.0 + CTRL_H + 30.0 + CTRL_H + 24.0 + (cell.y + 4.0) * 6.0 + 30.0;
+    let below = field.bottom() + 4.0 + popup_h <= ui.ctx().screen_rect().bottom();
+    let (anchor, pivot) = if below { (field.left_bottom() + egui::vec2(0.0, 4.0), egui::Align2::LEFT_TOP) } else { (field.left_top() - egui::vec2(0.0, 4.0), egui::Align2::LEFT_BOTTOM) };
+    let mut chosen: Option<NaiveDate> = None;
+    let mut close = false;
+    let area = egui::Area::new(id.with("area")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(anchor).show(ui.ctx(), |ui| {
+        egui::Frame::new().fill(c.raised).stroke(Stroke::new(1.0, c.border)).corner_radius(8.0).inner_margin(egui::Margin::same(10)).shadow(egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: egui::Color32::from_black_alpha(80) }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+            ui.set_width(width);
+            label(ui, "Go to date");
+            let r = input(ui, &mut text, Field::new("Go to date", width).hint(&short_date(today)).mono().invalid(error));
+            if fresh {
+                // focused with its text selected: typing a date replaces it
+                r.request_focus();
+                if let Some(mut st) = egui::text_edit::TextEditState::load(ui.ctx(), r.id) {
+                    let n = text.chars().count();
+                    st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
+                    st.store(ui.ctx(), r.id);
+                }
+            }
+            if r.changed() {
+                error = false;
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                match parse_user_date(&text, today.year()) {
+                    Some(d) => chosen = Some(d),
+                    None => {
+                        error = true;
+                        r.request_focus();
+                    }
+                }
+            }
+            if error {
+                ui.label(egui::RichText::new(tr("Not a date: type it as 23/11/2026, 23/11 or 2026-11-23.")).size(12.0).color(c.red));
+            }
+            ui.add_space(6.0);
+            if let Some(d) = month_grid(ui, &mut first, Some((period.start, last)), today, monday, cell) {
+                chosen = Some(d);
+            }
+            ui.add_space(2.0);
+            if link_btn(ui, "Today").clicked() {
+                chosen = Some(today);
+            }
+        });
+    });
+    let outside = ui.input(|i| i.pointer.any_click()) && ui.input(|i| i.pointer.interact_pos()).is_some_and(|pos| !area.response.rect.contains(pos) && !field.contains(pos));
+    if outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        close = true;
+    }
+    if chosen.is_some() {
+        close = true;
+    }
+    ui.data_mut(|d| {
+        d.insert_temp(open_id, !close);
+        d.insert_temp(text_id, text);
+        d.insert_temp(month_id, first);
+        d.insert_temp(err_id, error);
+    });
+    chosen
 }

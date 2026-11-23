@@ -601,6 +601,18 @@ the widest, the full breakdown on hover); it is hidden when there is one project
   own tooltip say why: last week is empty, or those days are already filled or closed. Below 780 px the grid keeps its width and scrolls sideways: the one place that does.
 - Scenes: `--page sheet`, `--page week`.
 
+## The period field is a picker (23 Nov 2026)
+
+The date between ‹ and › in the period bar (Today, Report Time, Statistics) looked like an
+input but did nothing. It is now one: pointer, hover border, focus ring, a calendar mark at its
+right edge, and a click (or Enter / Space) opens a picker under it. At the top **Go to date**, a
+field holding the period's date already selected, so typing replaces it; it takes 23/11/2026,
+23/11 (this year), 23.11.2026, 23-11-2026, 2026-11-23 and 3/1/27, and Enter jumps. A wrong date
+turns the field red with the accepted forms under it. Below, the month (`month_grid`, the same as
+the dialogs' date fields) with the current period marked: one day filled, a week or a month
+tinted as one block, today outlined. A day jumps there in the same Day/Week/Month; Today, Esc and
+a click outside as everywhere. Scenes: `--page period-picker`, `--page period-picker-week`.
+
 ## Trying things on sample data (19 Nov 2026)
 
 `devtrack --demo` opens a second, separate copy of the app's data that is kept on disk, in
