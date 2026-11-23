@@ -1,14 +1,20 @@
-## DevTrack 0.1.15
+## DevTrack 0.1.16
 
-### Correzioni
-- **Icona nel Dock con DevTrack aperto:** mentre l'app è aperta, il Dock mostrava una "e" al posto del logo. Ora l'icona è la stessa con l'app aperta e chiusa.
+### Novità
+- **Assistenti AI:** Claude e gli altri assistenti compatibili con MCP possono leggere il tempo che registri e prepararti risposte e report per i PM, per esempio "Quante ore ho fatto la settimana scorsa per cliente?" o "Prepara il report della settimana per il PM di Portale clienti". Le cifre le calcola DevTrack dalle tue sessioni, con le stesse regole dell'app; l'assistente scrive il testo intorno. Le durate sono scritte come "4 h 18 min", e i report contengono tabelle per attività, per giorno e per progetto.
+- **Impostazioni › Assistenti AI:** prima trovi cosa può leggere un assistente, poi l'interruttore per attivarlo, spento finché non lo accendi e valido solo su quel dispositivo. Una riga verifica da sola che tutto funzioni. Claude Desktop si collega con un clic, dopo una conferma e una copia del suo file di configurazione. Per Claude Code e gli altri assistenti c'è il comando da copiare, e ci sono anche esempi di domande da fare.
+- **Azure DevOps negli assistenti:** con un secondo interruttore, l'assistente legge anche i work item assegnati a te e, quando serve, ne legge uno dal vivo: stato, Completed e Remaining Work, ultimi cambiamenti. I report mostrano allora l'avanzamento rispetto alle stime, con le ore di DevTrack accanto a quelle dichiarate su DevOps.
+- **Report pronti e anonimizzati:** in Claude Desktop ci sono tre report pronti (settimanale per il PM, stato di un progetto, riepilogo per cliente). Per un report da mandare fuori dal team puoi chiederlo anonimizzato: i clienti diventano "Client A", "Client B" e le note restano fuori.
+
+### Da sapere
+- L'assistente legge e basta: non può cambiare nulla, né in DevTrack né su Azure DevOps, e non vede mai i token. Quello che legge però va al servizio dell'assistente che usi (Anthropic per Claude, OpenAI per ChatGPT e Codex).
 
 ### Download
 | Sistema | File |
 |---|---|
-| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.15-macOS.dmg` |
-| Windows 10/11 (x64) | `DevTrack-0.1.15-Windows-x64.zip` |
-| Linux (x64) | `DevTrack-0.1.15-Linux-x64.tar.gz` |
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.16-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.16-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.16-Linux-x64.tar.gz` |
 
 ### Aggiornare
 Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
@@ -27,6 +33,11 @@ Questa versione non è ancora firmata dagli editori dei sistemi operativi, quind
 ### Limiti noti
 - L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
 - Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
+## DevTrack 0.1.15
+
+### Correzioni
+- **Icona nel Dock con DevTrack aperto:** mentre l'app è aperta, il Dock mostrava una "e" al posto del logo. Ora l'icona è la stessa con l'app aperta e chiusa.
 
 ## DevTrack 0.1.14
 
