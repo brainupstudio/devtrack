@@ -26,8 +26,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # Signs with the same self-made certificate every time, so macOS sees each version as the
+      # same app and keeps the keychain's "Always Allow" after an update. Without the secrets
+      # (e.g. on a fork) the app is signed ad hoc as before.
+      - name: Signing certificate
+        env:
+          P12: ${{ secrets.MACOS_SIGN_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "no signing certificate: ad hoc signature"; exit 0; fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kp="$(openssl rand -hex 16)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$kp" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kp" "$kc"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          id="$(security find-identity -p codesigning "$kc" | awk '/DevTrack Code Signing/ {print $2; exit}')"
+          [ -n "$id" ] || { echo "certificate not found in the keychain" >&2; exit 1; }
+          echo "DEVTRACK_SIGN_ID=$id" >> "$GITHUB_ENV"
       - name: Build DevTrack.app and the disk image
         run: scripts/bundle-macos.sh --universal --dmg
+      - name: Check the signature
+        run: codesign -d -r- target/release/bundle/DevTrack.app 2>&1 | tail -1
       - uses: actions/upload-artifact@v4
         with:
           name: macos

@@ -9,7 +9,8 @@
 # Signing: ad hoc by default, so the app runs on the Mac that built it and, on other Macs,
 # opens after right-click › Open. With a Developer ID certificate in the keychain, set
 # DEVTRACK_SIGN_ID="Developer ID Application: …" to sign it properly (notarization is a
-# separate step: see RELEASE.md).
+# separate step: see RELEASE.md). Any other DEVTRACK_SIGN_ID (a name or SHA-1 hash) signs with
+# that certificate as is, which is how the release CI keeps one identity across versions.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -90,6 +91,10 @@ EOF
 
 if [ "$SIGN_ID" = "-" ]; then
     codesign --force --sign - "$APP" >/dev/null
+elif [ "${SIGN_ID#Developer ID}" = "$SIGN_ID" ]; then
+    # a self-made certificate (the release CI uses one): it keeps the app's identity the same
+    # from one version to the next, so macOS remembers "Always Allow" for the keychain
+    codesign --force --sign "$SIGN_ID" "$APP"
 else
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 fi

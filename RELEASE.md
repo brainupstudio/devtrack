@@ -39,9 +39,11 @@ scripts/bundle-macos.sh --universal --dmg
 ```
 Il DMG finisce in `dist/` (ignorata da Git).
 
-## Firma (non ancora fatta)
+## Firma
 
-Senza firma i sistemi mostrano un avviso al primo avvio dei pacchetti scaricati dal browser; le istruzioni per superarlo sono in `CHANGELOG.md`. Gli script di installazione del sito (`curl … | sh`, `irm … | iex`) scaricano senza il segno "da internet", quindi l'avviso non compare: è la strada gratuita finché l'app non è firmata.
+Su macOS il workflow firma l'app con un certificato autoprodotto, sempre lo stesso (segreti `MACOS_SIGN_P12`, il file .p12 in base64, e `MACOS_SIGN_P12_PASSWORD`). Così ogni versione ha la stessa identità e il portachiavi ricorda "Consenti sempre" anche dopo un aggiornamento. Non toglie l'avviso di Gatekeeper: per quello serve il certificato Developer ID descritto sotto. Senza i segreti, per esempio in un fork, l'app viene firmata ad hoc.
+
+Senza una firma riconosciuta i sistemi mostrano un avviso al primo avvio dei pacchetti scaricati dal browser; le istruzioni per superarlo sono in `CHANGELOG.md`. Gli script di installazione del sito (`curl … | sh`, `irm … | iex`) scaricano senza il segno "da internet", quindi l'avviso non compare: è la strada gratuita finché l'app non è firmata.
 
 - **macOS:** serve un certificato *Developer ID Application* (programma Apple Developer, 99 USD/anno; i certificati *Apple Development* presenti su questo Mac non bastano). Con il certificato nel portachiavi:
   ```sh
