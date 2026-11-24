@@ -829,6 +829,11 @@ impl App {
                 }
                 Page::Today
             }
+            // the pointer over the project bar's second segment (review pictures only)
+            "project-bar" => {
+                SHOT_POINTER.store(true, std::sync::atomic::Ordering::Relaxed);
+                Page::Today
+            }
             "timer-project" => {
                 // the timer's project menu, open (review pictures only)
                 widgets::SHOT_OPEN_PROJECT.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2079,7 +2084,18 @@ impl App {
     }
 }
 
+/// Review pictures: a pointer resting over the project bar on Today (`--page project-bar`).
+pub static SHOT_POINTER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if SHOT_POINTER.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(at) = self.today.shot_pointer.get() {
+                raw_input.events.push(egui::Event::PointerMoved(at));
+            }
+        }
+    }
+
     /// Fully clear: the compact editor's own window is see-through so its rounded frame is its
     /// shape. Every other window is covered edge to edge by its panels.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

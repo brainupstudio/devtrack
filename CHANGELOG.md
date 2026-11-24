@@ -1,3 +1,39 @@
+## DevTrack 0.1.17
+
+### Novità
+- **Ore per attività:** in Oggi una nuova vista, Per attività, mostra una riga per ogni attività con il totale del giorno, dalla prima partenza all'ultima fine. Apri la riga per vederne le sessioni. Nella finestra compatta lo stesso raggruppamento si attiva con il pulsante accanto ad "Aggiungi sessione".
+- **Copia della giornata:** il pulsante di copia in fondo a ogni giorno copia i totali per attività, con il valore per ogni piattaforma e la riga del totale, pronti da incollare in un foglio di calcolo.
+- **Barra di Oggi più compatta:** le quattro viste (Elenco, Per attività, Calendario, Timesheet) sono icone accanto a Giorno, Settimana e Mese. Sotto resta il totale, con lo stato delle sessioni scritto a parole.
+
+### Correzioni
+- **Modifica di una sessione:** scegliere il progetto dopo l'attività non azzera più il resto. L'attività resta se appartiene al progetto; se appartiene a un altro, viene tolta e un avviso dice perché. La ricerca dei progetti trova anche quelli degli altri clienti.
+- **Barra colorata dei progetti:** l'elenco dei progetti si apre sotto il segmento su cui sei, con il suo progetto in evidenza, e la barra si raggiunge più facilmente con il mouse.
+
+### Download
+| Sistema | File |
+|---|---|
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.17-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.17-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.17-Linux-x64.tar.gz` |
+
+### Aggiornare
+Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
+
+### Installare dal Terminale, senza avvisi
+Un comando scarica l'ultima versione, controlla che sia quella pubblicata e la installa; serve anche per aggiornare. Il sistema non mostra l'avviso sulle app non firmate.
+- **macOS e Linux**, nel Terminale: `curl -fsSL https://brainupstudio.github.io/devtrack.site/install.sh | sh`
+- **Windows**, in PowerShell: `irm https://brainupstudio.github.io/devtrack.site/install.ps1 | iex`
+
+### Primo avvio dal file scaricato
+Questa versione non è ancora firmata dagli editori dei sistemi operativi, quindi scaricata dal browser mostra un avviso la prima volta.
+- **macOS:** apri il DMG e trascina DevTrack in Applicazioni (sostituisci quella che c'è). Al primo avvio macOS dice che non può verificarla: premi Fine, apri Impostazioni di Sistema › Privacy e sicurezza e, in fondo, premi "Apri comunque". Serve una volta sola.
+- **Windows:** estrai lo zip e avvia `DevTrack.exe`. Se compare "Windows ha protetto il PC", scegli "Ulteriori informazioni" › "Esegui comunque".
+- **Linux:** estrai l'archivio ed esegui `./install.sh` per aggiungere DevTrack al menu delle applicazioni, oppure avvia direttamente `./devtrack`.
+
+### Limiti noti
+- L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
+- Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
 ## DevTrack 0.1.16
 
 ### Novità

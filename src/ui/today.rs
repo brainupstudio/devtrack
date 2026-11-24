@@ -57,6 +57,8 @@ impl Default for Past {
 }
 
 pub struct TodayState {
+    /// Review pictures: where the pointer rests over the project bar (`--page project-bar`).
+    pub shot_pointer: std::cell::Cell<Option<egui::Pos2>>,
     pub draft: Draft,
     pub past: Past,
     pub past_open: bool,
@@ -95,7 +97,7 @@ pub struct TodayState {
 
 impl TodayState {
     pub fn new(period: Period) -> Self {
-        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false, open_groups: Default::default() }
+        TodayState { shot_pointer: Default::default(), draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false, open_groups: Default::default() }
     }
 }
 
@@ -232,18 +234,32 @@ fn settle_work(app: &mut App, task_pick: Pick, project_pick: Pick, client_pick: 
     if client_changed {
         let db = &app.store.db;
         if client_of(db, project) != *chosen {
+            // the task's own project when it is this client's, else the client's only project
+            let task_project = task.as_deref().and_then(|t| db.task(t)).and_then(|x| x.project_id.clone());
             let own: Vec<&Project> = chosen.as_ref().map(|c| db.projects_of_client(c).into_iter().filter(|p| !p.archived).collect()).unwrap_or_default();
-            *project = if own.len() == 1 { Some(own[0].id.clone()) } else { None };
-            // a task of another project no longer fits
-            if let Some(t) = task {
-                if db.task(t).map(|x| x.project_id.is_some() && x.project_id != *project).unwrap_or(false) {
-                    *t = None;
-                }
-            }
+            *project = match task_project.filter(|tp| own.iter().any(|p| &p.id == tp)) {
+                Some(tp) => Some(tp),
+                None if own.len() == 1 => Some(own[0].id.clone()),
+                None => None,
+            };
             changed = true;
         }
     } else if changed && project.is_some() {
         *chosen = client_of(&app.store.db, project);
+    }
+    // A task belongs to one project: when the project changes to another one, the task goes,
+    // and the notice says why. Nothing else in the form changes.
+    if changed && !task_changed {
+        if let Some(t) = task {
+            if let Some(x) = app.store.db.task(t) {
+                if x.project_id.is_some() && x.project_id != *project {
+                    let owner = app.store.db.project(&x.project_id).map(|p| p.name.clone()).unwrap_or_default();
+                    let title = truncate(&x.display(), 40);
+                    *t = None;
+                    app.notify(trf("“{}” belongs to {}: task removed", &[&title, &truncate(&owner, 40)]));
+                }
+            }
+        }
     }
     changed
 }
@@ -1747,25 +1763,64 @@ fn project_bar(app: &App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Per
     }
     by.sort_by_key(|x| std::cmp::Reverse(x.1));
     let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), Sense::hover());
+    // The line stays thin, but the whole band reacts to the pointer: the names over it and a
+    // margin under it, so it's easy to hit.
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 34.0), Sense::hover());
+    let line_y = rect.top() + 22.0;
     let mut x = rect.left();
-    let mut tip = vec![];
+    let mut segs: Vec<(f32, f32, String, egui::Color32, i64)> = vec![];
     for (pid, secs) in &by {
         let pr = app.store.db.project(pid);
         let name = pr.map(|p| p.name.clone()).unwrap_or(tr("No project"));
         let color = pr.map(|p| hex(&p.color)).unwrap_or(c.text2);
         let seg = w * (*secs as f32 / total as f32);
-        // 2 px between segments so two similar colours still read as two
-        let r = egui::Rect::from_min_max(egui::pos2(x, rect.bottom() - 4.0), egui::pos2((x + seg - 2.0).max(x + 1.0), rect.bottom() - 1.0));
-        ui.painter().rect_filled(r, 1.5, color);
-        let g = ui.painter().layout_no_wrap(name.clone(), sans(12.0), c.text2);
-        if g.size().x + 8.0 <= seg {
-            ui.painter().galley(egui::pos2(x, rect.top()), g, c.text2);
-        }
-        tip.push(format!("{} · {} · {}%", name, words(*secs), secs * 100 / total));
+        segs.push((x, x + seg, name, color, *secs));
         x += seg;
     }
-    resp.on_hover_text(tip.join("\n"));
+    if super::SHOT_POINTER.load(std::sync::atomic::Ordering::Relaxed) {
+        app.today.shot_pointer.set(Some(egui::pos2(rect.left() + w * 0.62, line_y)));
+    }
+    let hovered = resp.hover_pos().and_then(|pos| segs.iter().position(|s| pos.x >= s.0 && pos.x < s.1));
+    for (i, (x0, x1, name, color, _)) in segs.iter().enumerate() {
+        // 2 px between segments so two similar colours still read as two; the one under the
+        // pointer a little thicker
+        let grow = if hovered == Some(i) { 1.5 } else { 0.0 };
+        let r = egui::Rect::from_min_max(egui::pos2(*x0, line_y - grow), egui::pos2((x1 - 2.0).max(x0 + 1.0), line_y + 3.0 + grow));
+        ui.painter().rect_filled(r, 1.5, *color);
+        let text_color = if hovered == Some(i) { c.text } else { c.text2 };
+        let g = ui.painter().layout_no_wrap(name.clone(), sans(12.0), text_color);
+        if g.size().x + 8.0 <= x1 - x0 {
+            ui.painter().galley(egui::pos2(*x0, rect.top()), g, text_color);
+        }
+    }
+    // the list of projects opens under the segment you are on, with its row picked out
+    if let Some(h) = hovered {
+        let tip_w = 280.0f32;
+        let screen = ui.ctx().screen_rect();
+        let left = segs[h].0.max(rect.left()).min(screen.right() - tip_w - 8.0).max(screen.left() + 8.0);
+        egui::Area::new(ui.id().with("project-bar-tip"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(egui::pos2(left, line_y + 10.0))
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(tip_w - 16.0);
+                    for (i, (_, _, name, color, secs)) in segs.iter().enumerate() {
+                        let on = i == h;
+                        ui.horizontal(|ui| {
+                            let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 4.0, *color);
+                            let name_text = RichText::new(truncate(name, 28)).size(13.0);
+                            ui.label(if on { name_text.color(c.text).font(semibold(13.0)) } else { name_text.color(c.text2) });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let v = RichText::new(format!("{} · {}%", words(*secs), secs * 100 / total)).size(13.0);
+                                ui.label(if on { v.color(c.text) } else { v.color(c.text2) });
+                            });
+                        });
+                    }
+                });
+            });
+    }
     ui.add_space(ROW_GAP);
 }
 
@@ -2899,6 +2954,35 @@ mod session_panel_tests {
         let saved = app.store.db.live_entries().find(|x| x.id == e.id).cloned().unwrap();
         assert_eq!(saved.start, e.start);
         assert_eq!(saved.stop, Some(e.start + 3600));
+    }
+
+    /// Choosing the project after the task keeps the task when it is that project's, and takes
+    /// it away (saying so) when it is another's; choosing the client keeps the task's project.
+    #[test]
+    fn choosing_the_project_after_the_task_keeps_what_fits() {
+        let mut app = demo();
+        let db = &app.store.db;
+        let t = db.live_tasks().find(|t| t.project_id.is_some()).cloned().expect("a task with a project");
+        let own = t.project_id.clone();
+        let other = db.live_projects().into_iter().find(|p| Some(&p.id) != own.as_ref()).map(|p| p.id.clone()).expect("another project");
+        // the task's own project: everything stays
+        let (mut project, mut task, mut client) = (own.clone(), Some(t.id.clone()), None);
+        settle_work(&mut app, Pick::None, Pick::Changed, Pick::None, &mut project, Some(&mut task), &mut client);
+        assert_eq!(task.as_deref(), Some(t.id.as_str()));
+        assert_eq!(client, client_of(&app.store.db, &own));
+        // the task's client again, chosen by hand: its project stays the task's
+        if let Some(c) = client.clone() {
+            let mut chosen = Some(c);
+            settle_work(&mut app, Pick::None, Pick::None, Pick::Changed, &mut project, Some(&mut task), &mut chosen);
+            assert_eq!(project, own);
+            assert_eq!(task.as_deref(), Some(t.id.as_str()));
+        }
+        // another project: the task goes, the project and the client are the new ones
+        project = Some(other.clone());
+        settle_work(&mut app, Pick::None, Pick::Changed, Pick::None, &mut project, Some(&mut task), &mut client);
+        assert_eq!(project.as_deref(), Some(other.as_str()));
+        assert!(task.is_none(), "a task of another project no longer fits");
+        assert_eq!(client, client_of(&app.store.db, &Some(other)));
     }
 
     #[test]

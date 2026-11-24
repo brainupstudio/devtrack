@@ -10,6 +10,7 @@ pub static IT: &[(&str, &str)] = &[
     ("{} intervals", "{} intervalli"),
     ("Show the sessions", "Mostra le sessioni"),
     ("Hide the sessions", "Nascondi le sessioni"),
+    ("“{}” belongs to {}: task removed", "“{}” appartiene a {}: attività tolta"),
     ("Group by task", "Raggruppa per attività"),
     // ---- AI assistants ----
     ("AI assistants", "Assistenti AI"),

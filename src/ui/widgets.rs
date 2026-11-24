@@ -1683,7 +1683,9 @@ fn project_picker_with(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent:
     egui::popup_above_or_below_widget(ui, pid, &resp, side, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_width(340f32.max(trigger.width()).min(ui.ctx().screen_rect().width() - 32.0));
         let q = search_box(ui, sid, "Search project or client, or create one");
-        let projects: Vec<&Project> = db.live_projects().into_iter().filter(|p| !p.archived && (client.is_none() || p.client_id.as_ref() == client)).collect();
+        // the chosen client narrows the list, but a search finds every client's projects: the
+        // project you look for may be another client's (picking it changes the client)
+        let projects: Vec<&Project> = db.live_projects().into_iter().filter(|p| !p.archived && (client.is_none() || p.client_id.as_ref() == client || !q.trim().is_empty())).collect();
         let mut list: Vec<&&Project> = projects.iter().filter(|p| matches(&format!("{} {}", p.name, db.client_name(p)), &q)).collect();
         // grouped by client: No client first, then clients A–Z
         list.sort_by_key(|p| (!db.client_name(p).is_empty(), db.client_name(p).to_lowercase(), p.name.to_lowercase()));
