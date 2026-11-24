@@ -6,18 +6,19 @@ use super::i18n::trf_m;
 use super::widgets::*;
 use super::{page_header, App, Page};
 use devtrack_core::model::*;
-use devtrack_core::report::{needs_completion, summarize, Period, PeriodKind, Summary};
+use devtrack_core::report::{needs_completion, summarize_tagged, Period, PeriodKind, Summary};
 use devtrack_core::store::now_secs;
 use eframe::egui::{self, Color32, RichText, Sense, Stroke};
 
 pub struct StatsState {
     pub period: Period,
     pub project: Option<Id>,
+    pub tag: Option<TagFilter>,
 }
 
 impl StatsState {
     pub fn new(period: Period) -> Self {
-        StatsState { period, project: None }
+        StatsState { period, project: None, tag: None }
     }
 }
 
@@ -28,18 +29,31 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     page_header(ui, "Statistics", "Where your tracked time went.", |_| {});
     let mut period = app.stats.period;
     let mut filter = app.stats.project.clone();
-    let bar = super::period::period_toolbar(ui, &mut period, monday, [true, true, true], 220.0, |ui| {
+    let mut tag = app.stats.tag.clone();
+    // the tag filter only where there are tags (or one is still on)
+    let tags = !app.store.db.live_tags().is_empty() || tag.is_some();
+    let status_w = if tags { 220.0 + ROW_GAP + 168.0 } else { 220.0 };
+    let bar = super::period::period_toolbar(ui, &mut period, monday, [true, true, true], status_w, |ui| {
+        // project, then tag, read left to right in either layout of the bar
+        let rtl = ui.layout().prefer_right_to_left();
+        if tags && rtl {
+            tag_filter(ui, "stats-tag-filter", &app.store.db, &mut tag, 168.0);
+        }
         project_filter(ui, "stats-filter", &app.store.db, &mut filter, 220.0);
+        if tags && !rtl {
+            tag_filter(ui, "stats-tag-filter", &app.store.db, &mut tag, 168.0);
+        }
     });
     app.stats.project = filter;
+    app.stats.tag = tag;
     super::period::record(app, "stats", &bar);
     app.stats.period = period;
     ui.add_space(16.0);
-    let s = summarize(&app.store.db, &period, now, app.stats.project.as_ref());
+    let s = summarize_tagged(&app.store.db, &period, now, app.stats.project.as_ref(), app.stats.tag.as_ref());
     if s.total == 0 {
         let last = app.last_day_with_sessions(period.start);
         let (mut today, mut go_back) = (false, None);
-        let body = if app.stats.project.is_some() { "Nothing was tracked on this project in this period. Clear the project filter, or look at another period." } else { "Where the time went, by project and by day, appears once sessions are recorded in this period." };
+        let body = if app.stats.tag.is_some() { "Nothing with this tag was tracked in this period. Choose All tags, or look at another period." } else if app.stats.project.is_some() { "Nothing was tracked on this project in this period. Clear the project filter, or look at another period." } else { "Where the time went, by project and by day, appears once sessions are recorded in this period." };
         empty_state(ui, Icon::Stats, "No tracked time in this period", body, |ui| {
             today = secondary(ui, "Go to Today").clicked();
             if let Some(d) = last {
@@ -97,7 +111,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
                 section(ui, "Projects");
                 ui.add_space(4.0);
                 for (pid, d) in &s.by_project {
-                    let (name, color) = app.store.db.project(pid).map(|p| (p.name.clone(), hex(&p.color))).unwrap_or(("No project".into(), c.text2));
+                    let (name, color) = app.store.db.project(pid).map(|p| (p.name.clone(), hex(&p.color))).unwrap_or((tr("No project"), c.text2));
                     let row = ui.horizontal(|ui| {
                         ui.set_min_height(CTRL_H);
                         dot(ui, color, 3.5);
@@ -125,33 +139,59 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(16.0);
             tasks(app, ui, &s);
         }
-        // time by tag: a session with two tags counts under both, so these don't add up to the total
-        let mut by_tag: std::collections::BTreeMap<String, i64> = Default::default();
+        // time by tag: a session with two tags counts under both, so these don't add up to the
+        // total. Tags as the list spells them (one row for "Bug" and "bug"); the sessions with
+        // none last. The same sessions as above: project and tag filters apply.
+        let mut by_tag: Vec<(Option<String>, i64)> = vec![];
         let (pa, pb) = period.bounds();
         for e in devtrack_core::report::entries_in(&app.store.db, &period, now) {
             if app.stats.project.is_some() && e.project_id != app.stats.project { continue; }
+            if app.stats.tag.as_ref().is_some_and(|f| !f.matches(e)) { continue; }
+            let secs = devtrack_core::report::overlap(e, pa, pb, now);
+            let mut names: Vec<Option<String>> = vec![];
             for t in &e.tags {
-                *by_tag.entry(t.clone()).or_default() += devtrack_core::report::overlap(e, pa, pb, now);
+                let n = app.store.db.tag_named(t).map(|x| x.name.clone()).unwrap_or_else(|| clean_tag(t));
+                if !n.is_empty() && !names.iter().flatten().any(|x| x.eq_ignore_ascii_case(&n)) { names.push(Some(n)); }
+            }
+            if names.is_empty() { names.push(None); }
+            for n in names {
+                match by_tag.iter_mut().find(|(k, _)| match (k, &n) { (Some(a), Some(b)) => a.eq_ignore_ascii_case(b), (None, None) => true, _ => false }) {
+                    Some((_, d)) => *d += secs,
+                    None => by_tag.push((n, secs)),
+                }
             }
         }
-        if !by_tag.is_empty() {
+        // only worth a section once some session has a tag
+        if by_tag.iter().any(|(k, _)| k.is_some()) {
             ui.add_space(24.0);
             section(ui, "Tags");
-            meta(ui, "A session with several tags counts under each of them.");
+            meta(ui, "A session with several tags counts under each of them. Click a tag to show only its sessions.");
             ui.add_space(4.0);
-            let mut list: Vec<(String, i64)> = by_tag.into_iter().collect();
-            list.sort_by_key(|x| std::cmp::Reverse(x.1));
+            by_tag.sort_by(|a, b| a.0.is_none().cmp(&b.0.is_none()).then(b.1.cmp(&a.1)));
             let w = ui.available_width().min(560.0);
-            for (tag, secs) in list {
-                ui.allocate_ui_with_layout(egui::vec2(w, CTRL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let mut pick: Option<TagFilter> = None;
+            for (tag, secs) in by_tag {
+                let label = match &tag { Some(t) => format!("#{}", t), None => tr("No tags") };
+                let r = ui.allocate_ui_with_layout(egui::vec2(w, CTRL_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.set_width(w);
-                    ui.label(format!("#{}", tag));
+                    ui.label(RichText::new(&label).color(if tag.is_some() { c.text } else { c.text2 }));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_sized(egui::vec2(52.0, 20.0), egui::Label::new(mono(pct(secs, s.total), 12.0).color(c.text2)));
                         mixed(ui, &words(secs), 14.0, None);
                     });
-                });
+                }).response;
+                // the row filters the page by its tag, as a #tag does on Today
+                let resp = ui.interact(r.rect, ui.id().with(("stats-tag", &label)), Sense::click())
+                    .on_hover_text(match &tag { Some(t) => trf_m!("Show only the sessions with #{}", t), None => tr("Show only the sessions without tags") });
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if resp.clicked() {
+                    pick = Some(match tag { Some(t) => TagFilter::Tag(t), None => TagFilter::Untagged });
+                }
                 breakdown_footer(ui, None);
             }
+            if pick.is_some() { app.stats.tag = pick; }
         }
         if review {
             let first = app.store.db.live_entries().filter(|e| e.project_id.is_none() && !e.is_running() && period.contains(devtrack_core::report::local_date(e.start))).max_by_key(|e| e.start).cloned();

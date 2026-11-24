@@ -528,24 +528,6 @@ pub fn draw_glyph(painter: &egui::Painter, c: egui::Pos2, g: Glyph, col: Color32
     }
 }
 
-/// A 36×36 icon button that stays pressed while `on`: the selected fill and an amber glyph, as
-/// every selected state in the app (and the accessible "selected" state, not only colour).
-pub fn icon_toggle(ui: &mut Ui, glyph: Glyph, name: &str, on: bool) -> egui::Response {
-    let c = p(ui);
-    let name = tr(name);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(CTRL_H, CTRL_H), Sense::click());
-    let over = resp.hovered() || resp.is_pointer_button_down_on();
-    let fill = if on { c.selected } else { hover_mix(ui, resp.id, over, c.raised, c.hover) };
-    let edge = if on { c.border } else { hover_mix(ui, resp.id.with("edge"), over, c.border, c.text2) };
-    ui.painter().rect(rect, RADIUS, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
-    draw_glyph(ui.painter(), rect.center(), glyph, if on { c.amber } else { c.text });
-    if resp.has_focus() {
-        focus_ring(ui, rect);
-    }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name.clone()));
-    resp.on_hover_text(name)
-}
-
 /// 36×36 icon button with a tooltip and an accessible name.
 pub fn icon_button(ui: &mut Ui, glyph: Glyph, name: &str) -> egui::Response {
     let c = p(ui);
@@ -1034,6 +1016,25 @@ pub fn menu_row_raw(ui: &mut Ui, text: &str, selected: bool, is_mono: bool) -> e
 }
 
 /// Segmented switch in the 36-unit family: a framed group of options; neutral selected fill.
+/// The width `segmented` takes for these options.
+pub fn segmented_w(ui: &Ui, options: &[&str]) -> f32 {
+    let font = sans(14.0);
+    let sum: f32 = options.iter().map(|o| text_w(ui, &tr(o), &font) + 24.0).sum();
+    (sum + 8.0 + 4.0 * options.len().saturating_sub(1) as f32).ceil()
+}
+
+/// A segmented switch where it fits; in a narrower place the same choice as a select field of
+/// the whole width, so tabs never run past the window's edge.
+pub fn segmented_or_select(ui: &mut Ui, salt: impl std::hash::Hash, options: &[&str], selected: usize) -> Option<usize> {
+    if segmented_w(ui, options) <= ui.available_width() {
+        return segmented(ui, options, selected);
+    }
+    let mut v = selected;
+    let opts: Vec<(usize, String)> = options.iter().enumerate().map(|(i, o)| (i, tr(o))).collect();
+    let w = ui.available_width();
+    if select(ui, salt, &mut v, &opts, w, false) && v != selected { Some(v) } else { None }
+}
+
 pub fn segmented(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
     let c = p(ui);
     let owned: Vec<String> = options.iter().map(|o| tr(o)).collect();
@@ -1578,6 +1579,253 @@ fn picker_trigger(ui: &mut Ui, trigger: Trigger, text: &str, placeholder: bool, 
     }
 }
 
+/// One tag as a chip: the name in a quiet rounded fill, no colour (colour belongs to projects).
+/// Returns its width; `at` is its left centre.
+fn tag_chip(ui: &Ui, at: egui::Pos2, name: &str, max_w: f32) -> f32 {
+    let c = p(ui);
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_string(), sans(12.0), c.text);
+    one_line(&mut job, (max_w - 16.0).max(16.0));
+    let g = ui.painter().layout_job(job);
+    let w = g.size().x + 16.0;
+    let r = Rect::from_min_size(egui::pos2(at.x, at.y - 11.0), egui::vec2(w, 22.0));
+    ui.painter().rect(r, 11.0, c.selected, Stroke::new(1.0, c.border), egui::StrokeKind::Inside);
+    ui.painter().galley(egui::pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, c.text);
+    w
+}
+
+/// The tag picker's field: the chosen tags as chips, "+N" for those that don't fit, a
+/// placeholder when there are none, and the select field's chevron.
+fn tag_field_trigger(ui: &mut Ui, tags: &[String], width: f32) -> egui::Response {
+    let c = p(ui);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, CTRL_H), Sense::click());
+    let hovered = resp.hovered();
+    ui.painter().rect(rect, RADIUS, if hovered { c.hover } else { c.field }, Stroke::new(1.0, if hovered { c.text2 } else { c.border }), egui::StrokeKind::Inside);
+    let right = rect.right() - PAD_X - 18.0;
+    if tags.is_empty() {
+        let g = ui.painter().layout_no_wrap(tr("Add tags"), sans(14.0), c.text2);
+        ui.painter().galley(egui::pos2(rect.left() + PAD_X, rect.center().y - g.size().y / 2.0), g, c.text2);
+    } else {
+        let mut x = rect.left() + 7.0;
+        for (i, t) in tags.iter().enumerate() {
+            let rest = tags.len() - i - 1;
+            // room for "+N" after this chip when more follow
+            let more_w = if rest > 0 { 34.0 } else { 0.0 };
+            let full = ui.painter().layout_no_wrap(t.clone(), sans(12.0), c.text).size().x + 16.0;
+            let room = right - x - more_w;
+            if full > room && (i > 0 || room < 48.0) {
+                let g = ui.painter().layout_no_wrap(format!("+{}", tags.len() - i), mono_font(12.0), c.text2);
+                ui.painter().galley(egui::pos2(x + 2.0, rect.center().y - g.size().y / 2.0), g, c.text2);
+                break;
+            }
+            x += tag_chip(ui, egui::pos2(x, rect.center().y), t, room) + 6.0;
+        }
+    }
+    let cc = egui::pos2(rect.right() - PAD_X - 4.0, rect.center().y);
+    let s = Stroke::new(1.4, c.text2);
+    ui.painter().line_segment([cc + egui::vec2(-4.0, -2.0), cc + egui::vec2(0.0, 2.0)], s);
+    ui.painter().line_segment([cc + egui::vec2(0.0, 2.0), cc + egui::vec2(4.0, -2.0)], s);
+    if resp.has_focus() {
+        focus_ring(ui, rect);
+    }
+    let label = if tags.is_empty() { tr("Tags") } else { format!("{}: {}", tr("Tags"), tags.join(", ")) };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, label.clone()));
+    resp
+}
+
+/// A row of the tag menu: a square check box, then the name. Returns true when clicked.
+fn tag_check_row(ui: &mut Ui, on: bool, name: &str) -> bool {
+    let c = p(ui);
+    let w = ui.available_width().max(200.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, MENU_ROW_H), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, c.hover);
+    }
+    let bx = Rect::from_center_size(egui::pos2(rect.left() + 18.0, rect.center().y), egui::vec2(16.0, 16.0));
+    if on {
+        ui.painter().rect_filled(bx, 3.0, c.amber);
+        draw_glyph(ui.painter(), bx.center(), Glyph::Check, c.canvas);
+    } else {
+        ui.painter().rect_stroke(bx, 3.0, Stroke::new(1.2, if resp.hovered() { c.text } else { c.text2 }), egui::StrokeKind::Inside);
+    }
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_string(), if on { medium(14.0) } else { sans(14.0) }, c.text);
+    one_line(&mut job, rect.right() - 10.0 - (rect.left() + 36.0));
+    let g = ui.painter().layout_job(job);
+    ui.painter().galley(egui::pos2(rect.left() + 36.0, rect.center().y - g.size().y / 2.0), g, c.text);
+    if resp.has_focus() {
+        focus_ring(ui, rect);
+    }
+    let n = name.to_string();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, n.clone()));
+    resp.clicked()
+}
+
+/// A tag search: the words as typed, or the same letters with spaces, dashes and capitals set
+/// aside ("code-review" finds "Code review").
+pub fn tag_matches(name: &str, q: &str) -> bool {
+    let k = devtrack_core::model::tag_key(q.trim().trim_start_matches('#'));
+    search_matches(q.trim().trim_start_matches('#'), &[name]) || (!k.is_empty() && devtrack_core::model::tag_key(name).contains(&k))
+}
+
+/// A one-line text cut with "…" to the room there is. With `tip`, that tip alone on the pointer:
+/// egui's own Label adds the uncut text as a second tip when it cuts, which would stack under it.
+pub fn cut_line(ui: &mut Ui, mut job: egui::text::LayoutJob, tip: Option<String>) -> egui::Response {
+    let Some(tip) = tip else { return ui.add(egui::Label::new(job).truncate()) };
+    job.wrap = egui::text::TextWrapping { max_width: ui.available_width().max(10.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let g = ui.painter().layout_job(job);
+    let (r, resp) = ui.allocate_exact_size(g.size(), Sense::hover());
+    ui.painter().galley(r.min, g, p(ui).text2);
+    resp.on_hover_text(tip)
+}
+
+/// How many rows a tag menu shows before it scrolls: the half row says there are more.
+const TAG_MENU_ROWS: f32 = 8.5;
+
+/// A one-shot tag menu under a trigger: a search, then the tags (each with a count when given);
+/// with `create`, the typed name can be created. Returns the chosen name, the menu closes.
+pub fn tag_menu(ui: &mut Ui, pid: egui::Id, trigger: &egui::Response, options: &[(String, Option<usize>)], create: bool) -> Option<String> {
+    let sid = pid.with("query");
+    if trigger.clicked() {
+        let opening = !ui.memory(|m| m.is_popup_open(pid));
+        ui.memory_mut(|m| m.toggle_popup(pid));
+        if opening {
+            ui.data_mut(|d| { d.insert_temp(sid, String::new()); d.insert_temp(sid.with("initial-focus"), true); });
+        }
+    }
+    let mut out = None;
+    let (side, room) = menu_side(ui, trigger.rect);
+    egui::popup_above_or_below_widget(ui, pid, trigger, side, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        ui.set_width(260.0);
+        let query = search_box(ui, sid, if create { "Search or create a tag" } else { "Search tags" });
+        let q = clean_tag(&query);
+        let ql = q.to_lowercase();
+        let found: Vec<&(String, Option<usize>)> = options.iter().filter(|(n, _)| ql.is_empty() || tag_matches(n, &q)).collect();
+        // a near copy of a tag already there is not offered: the search shows that one
+        let exact = options.iter().any(|(n, _)| devtrack_core::model::tag_key(n) == devtrack_core::model::tag_key(&q));
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let list_h = menu_list_h(ui, room);
+        // as tall as its rows (and the create row), up to the room there is
+        let list_h = list_h.min(TAG_MENU_ROWS * MENU_ROW_H);
+        let natural = ((found.len() + usize::from(create)).max(1) as f32 * MENU_ROW_H).min(list_h);
+        egui::ScrollArea::vertical().id_salt(pid.with("list")).max_height(list_h).min_scrolled_height(natural).show(ui, |ui| {
+            for (n, k) in &found {
+                let label = match k { Some(k) => format!("#{}  ·  {}", n, k), None => format!("#{}", n) };
+                if menu_row(ui, &label, false, false).clicked() {
+                    out = Some(n.clone());
+                }
+            }
+            if create && !q.is_empty() && !exact {
+                if menu_row(ui, &trf_m!("+ Create tag “{}”", q), false, false).clicked() {
+                    out = Some(q.clone());
+                }
+            } else if found.is_empty() {
+                meta(ui, "No matching tags");
+            }
+        });
+        // Enter takes the first match, or creates the typed name
+        if enter && out.is_none() && !q.is_empty() {
+            out = found.first().map(|(n, _)| n.clone()).or(if create { Some(q.clone()) } else { None });
+        }
+    });
+    if out.is_some() {
+        ui.memory_mut(|m| m.close_popup());
+        close(ui, sid);
+    }
+    out
+}
+
+/// Review pictures: open the editor's tag menu once (the "edit-tags" scene).
+pub static SHOT_OPEN_TAGS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tag picker: the tags as one list with check boxes, a search that also creates. Ticking and
+/// unticking keep the menu open, so several tags are set in one go; Enter in the search ticks
+/// the one tag it finds, or creates the typed one. Opens from a field (chips) or from an
+/// underlined word under the timer's task. `Pick::Create` carries a name that isn't a tag yet:
+/// the caller creates it (`Store::create_tag`) and adds it to `value`.
+pub fn tag_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, value: &mut Vec<String>, trigger: Trigger) -> Pick {
+    let mut out = Pick::None;
+    let pid = ui.make_persistent_id((&salt, "tag-popup"));
+    let sid = ui.make_persistent_id((&salt, "tag-q"));
+    let resp = match trigger {
+        Trigger::Field(w) => tag_field_trigger(ui, value, w),
+        Trigger::Link => {
+            let text = if value.is_empty() { tr("Tags") } else { value.iter().map(|t| format!("#{}", t)).collect::<Vec<_>>().join(" ") };
+            link_trigger(ui, &text, value.is_empty(), None)
+        }
+    };
+    // review pictures: the editor's tag menu, open once the window has settled
+    let shot = matches!(trigger, Trigger::Field(_)) && ui.ctx().cumulative_pass_nr() > 40 && SHOT_OPEN_TAGS.swap(false, std::sync::atomic::Ordering::Relaxed);
+    if resp.clicked() || shot {
+        ui.memory_mut(|m| m.toggle_popup(pid));
+        ui.data_mut(|d| d.insert_temp(sid.with("initial-focus"), true));
+    }
+    let was_open = ui.memory(|m| m.is_popup_open(pid));
+    let (side, room) = menu_side(ui, resp.rect);
+    egui::popup_above_or_below_widget(ui, pid, &resp, side, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        ui.set_width(300f32.max(trigger.width()).min(ui.ctx().screen_rect().width() - 32.0));
+        let q = search_box(ui, sid, "Search or create a tag");
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let all: Vec<&Tag> = db.live_tags();
+        let on = |name: &str, value: &Vec<String>| value.iter().any(|v| v.eq_ignore_ascii_case(name));
+        // chosen first (as chosen, a removed tag included), then the others A–Z; a search
+        // keeps that order among what it finds
+        let mut rows: Vec<String> = value.iter().filter(|v| tag_matches(v, &q)).cloned().collect();
+        rows.extend(all.iter().filter(|t| !on(&t.name, value) && tag_matches(&t.name, &q)).map(|t| t.name.clone()));
+        let typed = devtrack_core::model::clean_tag(&q);
+        // "code-review" when "code review" exists: that one is in the list, no near copy offered
+        let exact = !typed.is_empty() && (db.tag_like(&typed).is_some() || on(&typed, value));
+        let can_create = !typed.is_empty() && !exact;
+        let list_h = menu_list_h(ui, room - if can_create { CTRL_H + 12.0 } else { 0.0 });
+        let mut toggle: Option<String> = None;
+        // as tall as its rows, up to the room there is: without a floor the list shrank to
+        // 64 px, a row and a half
+        let list_h = list_h.min(TAG_MENU_ROWS * MENU_ROW_H);
+        let natural = (rows.len().max(1) as f32 * MENU_ROW_H).min(list_h);
+        egui::ScrollArea::vertical().id_salt(pid.with("list")).max_height(list_h).min_scrolled_height(natural).show(ui, |ui| {
+            for name in &rows {
+                if tag_check_row(ui, on(name, value), name) {
+                    toggle = Some(name.clone());
+                }
+            }
+            if rows.is_empty() {
+                ui.add_space(6.0);
+                if all.is_empty() && q.trim().is_empty() {
+                    meta(ui, "No tags yet: type one to create it.");
+                } else if !can_create {
+                    meta(ui, trf_m!("No tag matches “{}”.", q.trim()));
+                }
+            }
+        });
+        if can_create && (secondary(ui, &trf_m!("+ Create tag “{}”", truncate(&typed, 28))).clicked() || (enter && rows.is_empty())) {
+            out = Pick::Create(typed.clone());
+            ui.data_mut(|d| d.insert_temp(sid, String::new()));
+        } else if enter && !typed.is_empty() {
+            // Enter ticks the tag the search names (or the only one it finds)
+            let hit = rows.iter().find(|r| r.eq_ignore_ascii_case(&typed)).or(if rows.len() == 1 { rows.first() } else { None });
+            if let Some(h) = hit {
+                toggle = Some(h.clone());
+                ui.data_mut(|d| d.insert_temp(sid, String::new()));
+            }
+        }
+        if let Some(name) = toggle {
+            if on(&name, value) {
+                value.retain(|v| !v.eq_ignore_ascii_case(&name));
+            } else {
+                value.push(name);
+            }
+            out = Pick::Changed;
+        }
+        // the search keeps the keyboard after a tick, so the next tag is one word away
+        if out != Pick::None {
+            ui.data_mut(|d| d.insert_temp(sid.with("initial-focus"), true));
+        }
+    });
+    if was_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.remove::<String>(sid));
+        resp.request_focus();
+    }
+    out
+}
+
 /// Project picker: search, recent, explicit empty result, create.
 pub fn project_picker(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent: &[Id], value: &mut Option<Id>, width: f32) -> Pick {
     project_picker_with(ui, salt, db, recent, value, Trigger::Field(width), None, true)
@@ -1742,6 +1990,74 @@ fn project_picker_with(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, recent:
     });
     if out != Pick::None || (was_open && ui.input(|i| i.key_pressed(egui::Key::Escape))) { resp.request_focus(); }
     out
+}
+
+/// What a tag filter's trigger says: "All tags", "No tags" or "#name".
+pub fn tag_filter_text(value: &Option<TagFilter>) -> String {
+    match value {
+        None => tr("All tags"),
+        Some(TagFilter::Untagged) => tr("No tags"),
+        Some(TagFilter::Tag(n)) => format!("#{}", n),
+    }
+}
+
+/// The tag filter: All tags, No tags, then the list A–Z with a search, as the project filter.
+/// True when the choice changed.
+pub fn tag_filter(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, value: &mut Option<TagFilter>, width: f32) -> bool {
+    tag_filter_with(ui, salt, db, value, width, false)
+}
+
+/// As `tag_filter`; `named` puts "Tag:" before the choice, for a row of filters that all name
+/// themselves ("Client: All clients", "Tag: #bug").
+pub fn tag_filter_with(ui: &mut Ui, salt: impl std::hash::Hash, db: &Db, value: &mut Option<TagFilter>, width: f32, named: bool) -> bool {
+    let text = if named { format!("{}: {}", tr("Tags"), tag_filter_text(value)) } else { tag_filter_text(value) };
+    let pid = ui.make_persistent_id((&salt, "tag-filter-popup"));
+    let sid = ui.make_persistent_id((&salt, "tag-filter-query"));
+    let response = select_trigger(ui, &text, value.is_none() && !named, width, true, false, false)
+        .on_hover_text(tr("Show only the sessions with a tag"));
+    if response.clicked() {
+        let opening = !ui.memory(|m| m.is_popup_open(pid));
+        ui.memory_mut(|m| m.toggle_popup(pid));
+        if opening {
+            ui.data_mut(|d| { d.insert_temp(sid, String::new()); d.insert_temp(sid.with("initial-focus"), true); });
+        }
+    }
+    let mut changed = false;
+    let (side, room) = menu_side(ui, response.rect);
+    egui::popup_above_or_below_widget(ui, pid, &response, side, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        ui.set_width(260.0f32.max(width).min(ui.ctx().screen_rect().width() - 32.0));
+        let query = search_box(ui, sid, "Search tags");
+        let q = query.trim().trim_start_matches('#').to_lowercase();
+        if q.is_empty() {
+            if menu_row(ui, "All tags", value.is_none(), false).clicked() {
+                *value = None;
+                changed = true;
+                close(ui, sid);
+            }
+            if menu_row(ui, "No tags", *value == Some(TagFilter::Untagged), false).on_hover_text(tr("Sessions without any tag")).clicked() {
+                *value = Some(TagFilter::Untagged);
+                changed = true;
+                close(ui, sid);
+            }
+            ui.separator();
+        }
+        let mut tags: Vec<&Tag> = db.live_tags().into_iter().filter(|t| q.is_empty() || tag_matches(&t.name, &q)).collect();
+        tags.sort_by_key(|t| t.name.to_lowercase());
+        let list_h = menu_list_h(ui, room);
+        egui::ScrollArea::vertical().id_salt(pid.with("results")).max_height(list_h).min_scrolled_height(list_h.min(tags.len() as f32 * CTRL_H)).show(ui, |ui| {
+            for t in &tags {
+                let on = matches!(value, Some(TagFilter::Tag(n)) if n.eq_ignore_ascii_case(&t.name));
+                if menu_row(ui, &format!("#{}", t.name), on, false).clicked() {
+                    *value = Some(TagFilter::Tag(t.name.clone()));
+                    changed = true;
+                    close(ui, sid);
+                }
+            }
+            if tags.is_empty() { meta(ui, "No matching tags"); }
+        });
+    });
+    if changed { response.request_focus(); }
+    changed
 }
 
 /// Project filter, distinct from assignment: None means all projects, never "No project".

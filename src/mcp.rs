@@ -332,7 +332,8 @@ fn run(name: &str, args: &Map<String, Value>, db: &Db, now: i64, today: chrono::
                         .take(facts::MAX_ROWS)
                         .collect::<Vec<_>>(),
                 )?,
-                other => return Err(format!("“{other}” is not a kind; use clients, projects or tasks")),
+                "tags" => to_value(facts::tags(db, now).into_iter().filter(|t| hit(&t.name)).collect::<Vec<_>>())?,
+            other => return Err(format!("“{other}” is not a kind; use clients, projects, tasks or tags")),
             };
             Ok(json!({ "meta": facts::meta(db, None, now), "kind": kind, "items": items }))
         }
@@ -402,7 +403,7 @@ fn filter_props() -> Value {
         "task": { "type": "string", "description": "Task title, id or work item number (#4812 or 4812)." },
         "source": { "type": "string", "enum": ["manual", "azure_devops"] },
         "billable": { "type": "boolean" },
-        "tag": { "type": "string" },
+        "tag": { "type": "string", "description": "A tag (any case), or \"(no tag)\" for the sessions without any." },
         "text": { "type": "string", "description": "Words in the task title or the session's note." }
     })
 }
@@ -443,9 +444,9 @@ pub fn tools() -> Vec<Value> {
         tool(
             "devtrack_catalog",
             "Clients, projects and tasks",
-            "Lists clients, projects or tasks (with estimates, Azure DevOps work items and states), to find exact names and ids.",
+            "Lists clients, projects, tasks (with estimates, Azure DevOps work items and states) or tags, to find exact names and ids.",
             json!({
-                "kind": { "type": "string", "enum": ["clients", "projects", "tasks"], "description": "Default: projects." },
+                "kind": { "type": "string", "enum": ["clients", "projects", "tasks", "tags"], "description": "Default: projects. tags: the tags as one list, with sessions and time on each." },
                 "query": { "type": "string", "description": "Words in the name (or the work item number)." },
                 "include_archived": { "type": "boolean", "description": "Also archived clients and projects, and done tasks." }
             }),
@@ -491,11 +492,11 @@ pub fn tools() -> Vec<Value> {
         tool(
             "devtrack_report_tables",
             "Report tables",
-            "The tables of a report for a project manager, computed by DevTrack: weekly (by client and project, main tasks, by day), project (by task, then by day or by week; needs project) or client (by project and task; needs client). \
+            "The tables of a report for a project manager, computed by DevTrack: weekly (by client and project, main tasks, by day), project (by task, then by day or by week; needs project) client (by project and task; needs client) or tag (by tag, then by tag and project: the kinds of work); weekly adds a table by tag when the period's sessions have tags. \
              With Azure DevOps reading on, an \"Azure DevOps progress\" table is added for the work items of the period: state, estimate, Completed and Remaining Work read live, DevTrack's tracked time and where each stands. \
              Each comes with the estimates of the tasks worked on, Markdown to paste as it is and CSV. Use these figures as they are and write the commentary around them.",
             merge(&[
-                json!({ "kind": { "type": "string", "enum": ["weekly", "project", "client"], "description": "Default: weekly." } }),
+                json!({ "kind": { "type": "string", "enum": ["weekly", "project", "client", "tag"], "description": "Default: weekly." } }),
                 period_props(),
                 filter_props(),
             ]),
@@ -693,6 +694,37 @@ mod tests {
         assert!((got - summary.total).abs() <= 2, "{got} vs {}", summary.total);
         assert_eq!(sc["meta"]["period"]["from"], p.start.to_string());
         assert_eq!(serde_json::from_str::<Value>(r["content"][0]["text"].as_str().unwrap()).unwrap()["total"]["seconds"].as_i64().unwrap() / 60, got / 60);
+    }
+
+    /// Tags for an assistant: the list with its counts, a summary by tag in the list's spelling,
+    /// the sessions without tags, and the report by tag.
+    #[test]
+    fn tags_are_one_list_for_the_assistant_too() {
+        let now = crate::store::now_secs();
+        // through the store, as the app keeps it: the tags written by hand become one list
+        let db = crate::store::Store::in_memory(build_state(now, DemoState::Varied, false)).db;
+        let mut s = Server::new(Source::Fixed(db));
+        let r = call(&mut s, "devtrack_catalog", json!({ "kind": "tags" }));
+        assert_eq!(r["isError"], false);
+        let items = r["structuredContent"]["items"].as_array().unwrap().clone();
+        assert!(items.iter().any(|t| t["name"] == "sviluppo" && t["sessions"].as_u64().unwrap() > 0));
+        assert!(items.iter().any(|t| t["name"] == "Trasferta" && t["sessions"] == 0), "an unused tag is listed too");
+        assert_eq!(items.iter().filter(|t| t["name"].as_str().unwrap().eq_ignore_ascii_case("bug")).count(), 1);
+        // by tag: "Bug" and "bug" are one row, in the list's spelling
+        let r = call(&mut s, "devtrack_time_summary", json!({ "period": "this_month", "group_by": ["tag"] }));
+        let rows = r["structuredContent"]["rows"].as_array().unwrap().clone();
+        let bug: Vec<&Value> = rows.iter().filter(|x| x["keys"][0]["label"].as_str().is_some_and(|l| l.eq_ignore_ascii_case("bug"))).collect();
+        assert_eq!(bug.len(), 1, "{rows:?}");
+        assert!(rows.iter().any(|x| x["keys"][0]["label"] == "(no tag)"), "the unclassified call has no tag");
+        // only the sessions without tags
+        let r = call(&mut s, "devtrack_sessions", json!({ "period": "this_month", "tag": "(no tag)" }));
+        let rows = r["structuredContent"]["rows"].as_array().unwrap().clone();
+        assert!(!rows.is_empty() && rows.iter().all(|x| x["tags"].as_array().unwrap().is_empty()));
+        // the report by tag
+        let r = call(&mut s, "devtrack_report_tables", json!({ "kind": "tag", "period": "this_month" }));
+        assert_eq!(r["isError"], false, "{r:?}");
+        let titles: Vec<String> = r["structuredContent"]["tables"].as_array().unwrap().iter().map(|t| t["title"].as_str().unwrap().to_string()).collect();
+        assert!(titles.starts_with(&["By tag".to_string(), "By tag and project".to_string()]), "{titles:?}");
     }
 
     #[test]

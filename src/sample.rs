@@ -265,21 +265,28 @@ fn build_varied(now: i64) -> Db {
         (9 * 60 + 20, 85, "Login biometrico: flusso iOS", "p-hb-app", k("aurora", "7301")),
         (10 * 60 + 50, 40, "Errore con sessione scaduta", "p-hb-web", k("aurora", "7352")),
         (11 * 60 + 35, 50, "Estratto conto: impaginazione", "p-hb-web", k("aurora", "7340")),
+        // the same work item again after lunch and at the end of the day
+        (12 * 60 + 30, 25, "Login biometrico: test su Android", "p-hb-app", k("aurora", "7301")),
         (14 * 60, 70, "Appuntamenti: calendario", "p-cittadino", k("vallefiorita", "7301")),
         (15 * 60 + 15, 35, "Aggiornamento dei plugin", "p-sito", l("t-plugin")),
         (15 * 60 + 55, 55, "Checkout: metodi di pagamento", "p-ecom", l("t-checkout")),
         (17 * 60, 30, "Corso Rust, capitolo 8", "p-form", l("t-rust")),
+        (17 * 60 + 40, 40, "Login biometrico: correzioni dalla revisione", "p-hb-app", k("aurora", "7301")),
+        (18 * 60 + 30, 20, "Checkout: verifica dei pagamenti", "p-ecom", l("t-checkout")),
     ];
     let day_b: Plan = vec![
         (9 * 60, 15, "Riunione giornaliera", "p-riunioni", l("t-weekly")),
         (9 * 60 + 20, 110, "Migrazione delle anagrafiche", "p-core", k("aurora", "7401")),
         (11 * 60 + 15, 45, "Verifica dei saldi migrati", "p-core", k("aurora", "7402")),
         (12 * 60 + 5, 25, "Notifiche push: prototipo", "p-hb-app", k("aurora", "7315")),
+        (13 * 60 + 30, 20, "Migrazione delle anagrafiche: controllo dei duplicati", "p-core", k("aurora", "7401")),
         (14 * 60, 60, "Importazione delle pratiche", "p-ferri", l("t-import")),
         (15 * 60 + 5, 40, "Tributi: pagina di riepilogo", "p-cittadino", k("vallefiorita", "812")),
         (15 * 60 + 50, 45, "Newsletter d'autunno", "p-campagna", l("t-news")),
         (16 * 60 + 40, 35, "Demo per un nuovo cliente", "p-prev", None),
         (17 * 60 + 20, 20, "Scheda prodotto: varianti", "p-ecom", l("t-scheda")),
+        (17 * 60 + 50, 35, "Migrazione delle anagrafiche: seconda tranche", "p-core", k("aurora", "7401")),
+        (18 * 60 + 35, 15, "Notifiche push: revisione con il team", "p-hb-app", k("aurora", "7315")),
     ];
     let t0 = today();
     let mut n = 0;
@@ -299,8 +306,14 @@ fn build_varied(now: i64) -> Db {
             n += 1;
             let id = format!("seed-{}", n);
             let billable = db.projects[*pid].billable_default;
-            db.entries.insert(id.clone(), TimeEntry { id, description: desc.to_string(), project_id: Some(pid.to_string()), task_id: tid.clone(), start, stop: Some(stop), billable, ..Default::default() });
+            let tags = varied_tags(desc, back, i);
+            db.entries.insert(id.clone(), TimeEntry { id, description: desc.to_string(), project_id: Some(pid.to_string()), task_id: tid.clone(), start, stop: Some(stop), billable, tags, ..Default::default() });
         }
+    }
+    // two tags in the list that no session uses yet
+    for name in ["Da rivedere", "Trasferta"] {
+        let id = tag_id_for(name);
+        db.tags.insert(id.clone(), Tag { id, name: name.into(), ..Default::default() });
     }
     // one unclassified call on the last working day
     let y = last_working_day();
@@ -336,4 +349,45 @@ fn build_varied(now: i64) -> Db {
     b.mappings = codes;
     db.profiles.insert(b.id.clone(), b);
     db
+}
+
+/// Tags for a sample session. Some recur across clients and projects ("sviluppo", "bug",
+/// "riunione", "analisi", "code review", "supporto"); others belong to one project only ("iOS",
+/// "PDF", "SEO"). A few are written with another capital, as typed by hand on other devices: the
+/// list keeps one spelling of each.
+fn varied_tags(desc: &str, back: i64, i: usize) -> Vec<String> {
+    let odd = (back + i as i64) % 2 == 1;
+    let mut t: Vec<&str> = match desc {
+        "Riunione giornaliera" => vec!["riunione"],
+        "Login biometrico: flusso iOS" => vec!["sviluppo", "iOS", "biometria"],
+        "Login biometrico: test su Android" => vec!["test", "biometria"],
+        "Login biometrico: correzioni dalla revisione" => vec!["sviluppo", "iOS", "biometria"],
+        "Checkout: verifica dei pagamenti" => vec!["test", "pagamenti"],
+        "Migrazione delle anagrafiche: controllo dei duplicati" => vec!["migrazione dati", "analisi"],
+        "Migrazione delle anagrafiche: seconda tranche" => vec!["migrazione dati"],
+        "Notifiche push: revisione con il team" => vec!["riunione", "iOS", "notifiche"],
+        "Errore con sessione scaduta" => vec![if odd { "Bug" } else { "bug" }, "sicurezza"],
+        "Estratto conto: impaginazione" => vec!["sviluppo", "PDF"],
+        "Appuntamenti: calendario" => vec!["sviluppo", "analisi"],
+        "Aggiornamento dei plugin" => vec!["supporto", "WordPress"],
+        "Checkout: metodi di pagamento" => vec!["sviluppo", "pagamenti"],
+        "Corso Rust, capitolo 8" => vec!["formazione", "Rust"],
+        "Migrazione delle anagrafiche" => vec!["migrazione dati"],
+        "Verifica dei saldi migrati" => vec!["migrazione dati", "test"],
+        "Notifiche push: prototipo" => vec!["sviluppo", "iOS", "notifiche"],
+        "Importazione delle pratiche" => vec!["supporto", "migrazione dati"],
+        "Tributi: pagina di riepilogo" => vec!["sviluppo", "pagamenti", "accessibilità"],
+        "Newsletter d'autunno" => vec!["contenuti", "newsletter"],
+        "Demo per un nuovo cliente" => vec!["prevendita", "riunione"],
+        "Scheda prodotto: varianti" => vec!["sviluppo", "SEO"],
+        _ => vec![],
+    };
+    // every few days some work is reviewed, and now and then something is urgent
+    if (back + i as i64) % 3 == 0 && t.contains(&"sviluppo") {
+        t.push(if back % 2 == 0 { "code review" } else { "Code Review" });
+    }
+    if (back * 5 + i as i64) % 11 == 0 && !t.is_empty() {
+        t.push("urgente");
+    }
+    t.into_iter().map(String::from).collect()
 }

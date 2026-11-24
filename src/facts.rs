@@ -175,6 +175,15 @@ pub fn meta(db: &Db, period: Option<&Period>, now: i64) -> Meta {
 
 // ---------- catalog ----------
 
+/// A tag of the list, with how many sessions carry it and their time (all time, not a period).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TagRow {
+    pub name: String,
+    pub sessions: usize,
+    pub seconds: i64,
+    pub duration: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ClientRow {
     pub client_id: Id,
@@ -229,6 +238,21 @@ fn client_name(db: &Db, project_id: &Option<Id>) -> String {
 
 fn project_name(db: &Db, project_id: &Option<Id>) -> String {
     db.project(project_id).map(|p| p.name.clone()).unwrap_or_else(|| NO_PROJECT.to_string())
+}
+
+/// The tags as one list (the spelling every session uses), most used first.
+pub fn tags(db: &Db, now: i64) -> Vec<TagRow> {
+    let mut rows: Vec<TagRow> = db
+        .live_tags()
+        .into_iter()
+        .map(|t| {
+            let es: Vec<&TimeEntry> = db.live_entries().filter(|e| e.tags.iter().any(|x| same(x, &t.name))).collect();
+            let seconds: i64 = es.iter().map(|e| e.duration(now)).sum();
+            TagRow { name: t.name.clone(), sessions: es.len(), seconds, duration: duration(seconds) }
+        })
+        .collect();
+    rows.sort_by(|a, b| b.sessions.cmp(&a.sessions).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    rows
 }
 
 pub fn clients(db: &Db, include_archived: bool) -> Vec<ClientRow> {
@@ -314,6 +338,9 @@ pub struct TimeRow {
 
 /// Which sessions a question is about. A name matches its record's name without regard to
 /// case, or its id; `text` looks in the task title and the session's note.
+/// How a session without tags reads, as a group and as a filter value.
+pub const NO_TAG: &str = "(no tag)";
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Filter {
     pub client: Option<String>,
@@ -341,7 +368,8 @@ impl Filter {
             && (named(&self.task, &r.task_id, &r.task) || self.task.as_deref().is_some_and(|w| r.work_item.as_deref().is_some_and(|x| same(x, w) || same(&x[1..], w))))
             && self.source.as_deref().is_none_or(|s| same(&r.source, s))
             && self.billable.is_none_or(|b| r.billable == b)
-            && self.tag.as_deref().is_none_or(|t| r.tags.iter().any(|x| same(x, t)))
+            // "(no tag)" keeps the sessions without any
+            && self.tag.as_deref().is_none_or(|t| if same(t, NO_TAG) { r.tags.is_empty() } else { r.tags.iter().any(|x| same(x, t)) })
             && self.text.as_deref().is_none_or(|t| {
                 let t = t.trim().to_lowercase();
                 r.task.to_lowercase().contains(&t) || r.note.to_lowercase().contains(&t)
@@ -377,7 +405,15 @@ pub fn time_rows(db: &Db, p: &Period, now: i64, filter: &Filter) -> Vec<TimeRow>
                 source: task.map(|t| t.source.clone()).unwrap_or_else(|| SOURCE_MANUAL.to_string()),
                 origin: source_label(task.map(|t| t.source.as_str()).unwrap_or(SOURCE_MANUAL)).to_string(),
                 note: e.description.trim().to_string(),
-                tags: e.tags.clone(),
+                // the list's spelling ("bug" and "Bug" are one tag), each once
+                tags: {
+                    let mut ts: Vec<String> = vec![];
+                    for t in &e.tags {
+                        let n = db.tag_named(t).map(|x| x.name.clone()).unwrap_or_else(|| clean_tag(t));
+                        if !n.is_empty() && !ts.iter().any(|x| same(x, &n)) { ts.push(n); }
+                    }
+                    ts
+                },
                 billable: e.billable,
                 running: e.is_running(),
             };
@@ -469,7 +505,7 @@ impl Dim {
             }
             Dim::Tag => {
                 if r.tags.is_empty() {
-                    vec![("\u{10ffff}".into(), "(no tag)".into(), None)]
+                    vec![("\u{10ffff}".into(), NO_TAG.into(), None)]
                 } else {
                     r.tags.iter().map(|t| (t.to_lowercase(), t.clone(), None)).collect()
                 }
@@ -978,6 +1014,9 @@ pub enum ReportKind {
     Project,
     /// One client in a period: by project and by task.
     Client,
+    /// The period by tag (kind of work): by tag, then by tag and project. Tags inform; they
+    /// change no reported value.
+    Tag,
 }
 
 impl ReportKind {
@@ -986,7 +1025,8 @@ impl ReportKind {
             "weekly" => Ok(ReportKind::Weekly),
             "project" => Ok(ReportKind::Project),
             "client" => Ok(ReportKind::Client),
-            other => Err(format!("“{other}” is not a report; use weekly, project or client")),
+            "tag" => Ok(ReportKind::Tag),
+            other => Err(format!("“{other}” is not a report; use weekly, project, client or tag")),
         }
     }
 }
@@ -1089,6 +1129,14 @@ pub fn report_tables(db: &Db, kind: ReportKind, p: &Period, now: i64, filter: &F
             tables.push(grouped_table("Time by client and project", &summary(&[Dim::Client, Dim::Project])?, &["Client", "Project"], 40));
             tables.push(grouped_table("Main tasks", &summary(&[Dim::Task])?, &["Task"], 15));
             tables.push(grouped_table("By day", &summary(&[Dim::Day])?, &["Day"], 40));
+            // the kinds of work, when the period's sessions have tags
+            if time_rows(db, p, now, filter).iter().any(|r| !r.tags.is_empty()) {
+                tables.push(grouped_table("By tag", &summary(&[Dim::Tag])?, &["Tag"], 20));
+            }
+        }
+        ReportKind::Tag => {
+            tables.push(grouped_table("By tag", &summary(&[Dim::Tag])?, &["Tag"], 40));
+            tables.push(grouped_table("By tag and project", &summary(&[Dim::Tag, Dim::Project])?, &["Tag", "Project"], 60));
         }
         ReportKind::Project => {
             if filter.project.is_none() {
@@ -1141,6 +1189,7 @@ pub const GLOSSARY: &str = "# DevTrack: how to read the numbers
 - **Week**: starts on `meta.week_starts_on`; `meta.period.week` is its number, to name it in a title (\"week 47\"). **Month**: the calendar month.
 - **Durations**: `seconds` is exact, for any arithmetic; `duration` is the same time to read (\"4 h 18 min\"). In a report, write durations exactly as `duration` gives them: never as decimal hours (4,31) or as h:mm (4:18), which look like different numbers or a time of day. Shares are whole percentages.
 - **Client → project → task**: a session belongs to a project (and through it to a client) and usually to a task. Missing links read \"(no project)\", \"(no client)\", \"(no task)\".
+- **Tags**: kinds of work set on each session (\"sviluppo\", \"test\", \"riunione\"); sessions of one task can have different tags. They are one list, so \"Bug\" and \"bug\" are the same tag, always spelled as the list spells it. Sessions without any read \"(no tag)\"; `tag: \"(no tag)\"` filters them. A session with several tags counts under each, so a table by tag can add up to more than the total. Tags are informative: they change no reported value.
 - **Work item**: a task imported from Azure DevOps (\"#4812\"). DevTrack only reads Azure DevOps, never changes it.
 - **Estimate**: for a work item, its Original Estimate in Azure DevOps; for a local task or a project, the one set in DevTrack. **Progress** compares it with all the time ever tracked on it, not only the period's.
 - **Value to enter** (Report Time): what a destination system (a company timesheet, a client's hours log) expects, after its own rounding and format (0,75 or 0.45). It is the only place for decimal hours. It differs from tracked time on purpose: report it as is and never add it to tracked time.

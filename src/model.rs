@@ -75,6 +75,61 @@ pub fn legacy_client_id(name: &str) -> Id {
     format!("legacy-client:{}", name.trim())
 }
 
+/// A tag: one word that classifies time across projects (meeting, support…). Tags are one list,
+/// kept here and synced like the other records; a session carries the tag's name (as before
+/// this list existed, so older versions still read it), and renaming, merging or deleting a tag
+/// rewrites its sessions. Names are unique regardless of case.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Tag {
+    pub id: Id,
+    pub name: String,
+    #[serde(default)]
+    pub rev: Rev,
+    #[serde(default)]
+    pub deleted: bool,
+}
+record!(Tag);
+
+/// Stable id for a tag created from its name, so two devices that create (or migrate) the same
+/// tag on their own produce one record rather than two.
+pub fn tag_id_for(name: &str) -> Id {
+    format!("tag:{}", name.trim().to_lowercase())
+}
+
+/// Which sessions a tag filter keeps: those with one tag (any capitals), or those with none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TagFilter {
+    Tag(String),
+    Untagged,
+}
+
+impl TagFilter {
+    pub fn matches(&self, e: &TimeEntry) -> bool {
+        match self {
+            TagFilter::Tag(name) => {
+                let want = clean_tag(name).to_lowercase();
+                e.tags.iter().any(|t| clean_tag(t).to_lowercase() == want)
+            }
+            TagFilter::Untagged => e.tags.iter().all(|t| clean_tag(t).is_empty()),
+        }
+    }
+}
+
+/// What two spellings of one tag share: letters and digits only, lower case. "code review",
+/// "code-review" and "CodeReview" give the same key, so a search finds the tag already there
+/// before a near copy is created.
+pub fn tag_key(name: &str) -> String {
+    name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// A tag's name as typed: outer spaces and a leading # go, inner spaces become one, at most 40
+/// characters. Empty when nothing is left.
+pub fn clean_tag(name: &str) -> String {
+    let t = name.trim().trim_start_matches('#').trim();
+    let joined = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    joined.chars().take(40).collect()
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Project {
     pub id: Id,
@@ -612,6 +667,8 @@ pub struct Db {
     #[serde(default)]
     pub integrations: BTreeMap<Id, IntegrationConfig>,
     #[serde(default)]
+    pub tags: BTreeMap<Id, Tag>,
+    #[serde(default)]
     pub settings: Settings,
 }
 
@@ -663,6 +720,43 @@ impl Db {
     }
     pub fn live_tasks(&self) -> impl Iterator<Item = &Task> {
         self.tasks.values().filter(|t| !t.deleted)
+    }
+    /// The tags, A–Z regardless of case.
+    pub fn live_tags(&self) -> Vec<&Tag> {
+        let mut v: Vec<&Tag> = self.tags.values().filter(|t| !t.deleted).collect();
+        v.sort_by_key(|t| (t.name.to_lowercase(), t.id.clone()));
+        v
+    }
+    /// The tag with this name, regardless of case.
+    pub fn tag_named(&self, name: &str) -> Option<&Tag> {
+        let n = clean_tag(name).to_lowercase();
+        self.tags.values().find(|t| !t.deleted && t.name.to_lowercase() == n)
+    }
+    /// A tag spelled differently but the same once spaces, dashes and capitals are set aside.
+    pub fn tag_like(&self, name: &str) -> Option<&Tag> {
+        let k = tag_key(name);
+        if k.is_empty() {
+            return None;
+        }
+        self.tags.values().find(|t| !t.deleted && tag_key(&t.name) == k)
+    }
+    /// Tags most recently used, newest first (from the latest sessions), without repeats.
+    pub fn recent_tags(&self, n: usize) -> Vec<String> {
+        let mut es: Vec<&TimeEntry> = self.live_entries().filter(|e| !e.tags.is_empty()).collect();
+        es.sort_by_key(|e| std::cmp::Reverse(e.start));
+        let mut out: Vec<String> = vec![];
+        for e in es {
+            for t in &e.tags {
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+                    out.push(t.clone());
+                }
+            }
+            if out.len() >= n {
+                break;
+            }
+        }
+        out.truncate(n);
+        out
     }
     pub fn live_entries(&self) -> impl Iterator<Item = &TimeEntry> {
         self.entries.values().filter(|e| !e.deleted)

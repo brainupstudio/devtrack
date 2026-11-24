@@ -11,9 +11,15 @@ On the left, the sidebar: **Today**, **Work**, **Report Time** and **Statistics*
 details. The control at the top collapses the sidebar to its icons (⌘B / Ctrl+B).
 
 The **compact window** (⌘⇧M / Ctrl+Shift+M, or the button at the top right) is a small timer
-that can stay above other windows (**Settings › General › Compact window**). Clicking a session there opens a
-small editor by the row: task, project, duration, start and end, and the day; the full editor, with
-notes, tags and billable, is in the main window. On macOS a menu bar
+that can stay above other windows (**Settings › General › Compact window**). Its timer reads as
+Today's: the task, then **project · client · Tag** as links, the time and **Start**; while a
+session runs the same places hold it, with Pause and Stop. Clicking a session there opens a
+small editor by the row: task, project, tags, duration, start and end, and the day; the full editor,
+with notes and billable, is in the main window. Three icons above the sessions switch between the
+recent sessions, the same **by task**, and the **calendar** of one day: its sessions as blocks on
+the hours, with ‹ › to go from day to day. There, a click on a block edits it, a click on an empty
+hour adds a session at that time, and a block can be moved, or stretched from its upper or lower
+edge. In the list, ⇄ on a session shows its value for each platform (a click copies one). On macOS a menu bar
 item shows the running session's time or today's total; closing the window keeps DevTrack
 running there, and **Quit DevTrack** in its menu (or ⌘Q) ends it.
 
@@ -31,6 +37,21 @@ in the list can be looked up from the suggestions. Under the field, the project 
 the client are underlined: click either to choose it from a searchable list, or create a new
 one by typing its name. Choosing a client first narrows the projects to its own.
 
+**Tags** are the third link: tick the ones the session is about, or type a new one in the search
+to create it. Typing `#` and a word at the end of the task field does the same (a `#number` stays
+a work item's number): choose a tag from the list, or Enter for the first one.
+
+**Only one tag:** click a `#tag` in a session's grey line, or choose it in the tag menu at the
+right of the total, and the total, the project bar and the list show only its sessions. The
+calendar keeps the others, faint, so a busy hour never looks free. **No tags** shows the sessions without any; **×** shows everything again. The
+timesheet grid always shows everything.
+
+**Several sessions at once:** **Select** in a row's **···** menu, Space on the row, ⌘-click /
+Ctrl-click, or the box that takes the dot's place when the pointer is on a row ticks a session. While some are ticked, a click on any row ticks it
+too, and the list's header becomes a bar: the box there ticks them all, **Add tag** and **Remove
+tag** act on every ticked session at once (Undo puts them back), **×** or Esc lets them go.
+Sessions in a locked period stay as they were.
+
 While a session runs: **Pause**, **Stop**, and **…** for more. **Started hh:mm** under the field
 changes when it started.
 
@@ -41,8 +62,8 @@ changes when it started.
 - **List**: every session with its time and duration; ⇄ shows the value for each platform,
   ▷ starts it again, **…** edits, duplicates or deletes it.
 - **By task**: one line per task with the day's total (see *Sessions by task* below).
-- **Timeline**: the sessions placed on the hours of the day; drag to create, move or stretch
-  them (the step is set in **Settings › Time & days › Sessions**).
+- **Timeline**: the sessions placed on the hours of the day; drag a block to move it,
+  or its upper or lower edge to change its start or its end (the step is set in **Settings › Time & days › Sessions**).
 - **Timesheet**: one row per project, one column per day. Type a day's hours in a cell (8, 1,5
   or 1:30): DevTrack lengthens that day's last session on the project, or adds one. Under the
   grid, **Add a project to the week** adds the row of a project with no time yet (× removes a
@@ -58,29 +79,40 @@ over the page you are on.
 **Edit session** (from **…** or by clicking a row) changes task, project, client, start, end,
 duration, note, tags and billable. In both, the task list also offers the Azure DevOps work items
 assigned to you that are not in DevTrack yet: choosing one imports it and picks it. Changing the duration moves the end; an end before the start
-is an error, never a jump to the next day.
+is an error, never a jump to the next day. In a time field ↑/↓ change the hour or the minutes
+under the cursor (Shift: ten minutes). Once a time is changed, the session is in whole minutes:
+the seconds of both its start and its end are dropped, so the duration is round.
 
 ### Sessions by task
 
-When a task has several sessions in a day, the **By task** view (the second icon of the views on Today, or the grouping button beside "+ Add past time" in the compact window) shows one line
+When a task has several sessions in a day, the **By task** view (the second icon of the views on Today, or the second icon above the sessions in the compact window) shows one line
 per task with the day's total, from the first start to the last end. Open a line to see its
-sessions. The copy button at the end of each day copies the day's totals per task, with the value
-for each platform, ready to paste into a spreadsheet.
+sessions.
 
 ## Work
 
-Three tabs: **Tasks**, **Projects** and **Clients**. Work opens on Tasks.
+Four tabs: **Tasks**, **Projects**, **Clients** and **Tags**. Work opens on Tasks.
 
 - **Tasks**: every task with its project, client, source and tracked time. Click a row to open it
   in place: its planned hours, its source data and its most recent sessions (**Show all** lists
   the rest). The project and client under the title open them. When a task has planned hours,
   the row shows "tracked / planned", with a **!** once they are passed. Filters: search, status
   (open, done, all), client, project (including "No project"), source (added in DevTrack, or
-  read from Azure DevOps) and estimates (over the planned hours, or without any).
+  read from Azure DevOps), estimates (over the planned hours, or without any) and tag (tasks
+  with a session carrying it, or **No tags** for tasks with no tagged session).
   **+ Add task** asks for the project.
 - **Projects**: name, client, colour, whether new sessions are billable, and planned hours (the
   sum of their tasks' estimates). A project lists its tasks, which open in place the same way.
 - **Clients**: active and archived ones, with their projects.
+- A task (and a value in Report Time, and a group in Today's By task view) says its tags once: the most used in its grey line, all of
+  them with their counts when it is open; a session under it shows only the tags the others lack.
+- **Tags**: every tag with how many sessions have it and their time. **Rename** changes it on all
+  its sessions; a name another tag already has offers to merge the two. **Delete…** takes it off
+  its sessions (they stay), and Undo brings it back. **+ New tag** adds one.
+  The search finds a tag however it is written: "code-review" finds "Code review", and a near
+  copy is not offered as new. With sync, a tag renamed on one device while another, not yet
+  synced, puts the old name on a session comes back as a tag of its own: **Rename** it to the
+  new name and DevTrack offers to merge the two.
 
 Every list starts with a search field that works the same way: each word must appear in the
 name or in what it belongs to (a task's #number, project and client). ⌘F / Ctrl+F puts the
@@ -109,7 +141,8 @@ marked as changed after confirmation.
 
 ## Statistics
 
-Time per day, per project and per task for the chosen period, with a project filter.
+Time per day, per project and per task for the chosen period, with a project filter and a tag
+filter (one tag, or **No tags** for the sessions without any).
 
 ## Azure DevOps
 
@@ -129,6 +162,8 @@ An assistant such as Claude can read your tracked time and turn it into answers 
 for example "How many hours did I spend on Northwind last week, by project?" or "Prepare the
 weekly report for the Client portal PM". DevTrack gives it clean figures, computed exactly as
 the app shows them; the assistant writes the text around them.
+Tags are part of it: "How much time went into testing this month?" or "A report by tag for
+November" — by tag, by tag and project, or only the sessions without tags.
 
 1. In **Settings › AI assistants**, read what an assistant can see, then turn on **Let AI
    assistants read DevTrack**. It stays off until you do, and applies to this device only. The

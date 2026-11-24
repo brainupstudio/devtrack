@@ -569,9 +569,9 @@ DevTrack exists to show one tracked time the way each platform wants it written.
   (and a system notification on macOS).
 - The person's estimate is separate from the source's own (Azure DevOps "Estimate"), which is
   shown beside it and never copied.
-- **Tags.** "Edit session" has a Tags field: free words separated by commas. They show on
-  Today's second line as "#tag", are a column of the CSV export, and Statistics lists the time
-  by tag (a session with two tags counts under both).
+- **Tags.** Replaced on 24 Nov 2026 by one list of tags and a picker: see "Tags as one list".
+  They still show on Today's second line as "#tag", are a column of the CSV export, and
+  Statistics lists the time by tag (a session with two tags counts under both).
 
 ## Three views of the timesheet (19 Nov 2026)
 
@@ -898,12 +898,12 @@ Settings › **AI assistants**, its own tab between Connections and Sync (`assis
 
 ## Sessions by task — 24 November 2026
 
-Today's list and the compact window can show a day as one line per task (`by_task.rs`), for reading and copying the hours per task. The choice is saved on the device (`list_by_task`) and shared by both windows.
+Today's list and the compact window can show a day as one line per task (`by_task.rs`), for reading the hours per task. The choice is saved on the device (`list_by_task`) and shared by both windows.
 
-- **Switch.** Today: "By task" is a view, between List and Calendar (see below). Compact window: an icon toggle (`Glyph::Group`, `icon_toggle`: selected fill and amber glyph when on, accessible "selected" state) left of "+ Add past time".
+- **Switch.** Today: "By task" is a view, between List and Calendar (see below). Compact window: the second of three icons left of "+ Add past time" (see "The compact window's day calendar").
 - **Grouping.** Same task and project go together; a session with a note but no task goes with the same project and note; a session that needs details stays alone. Largest first; time order inside a group.
 - **A group's line.** Title, "N sessions · project · client" (never a session's note), first start → last end with "N intervals" under it (it is not one stretch of work), the total, the conversions of the total, Continue (the latest session) and a chevron. A click on the line or the chevron shows the sessions under it, as full rows with a 2 px line down their left edge, each opening its own editor. A group of one session is that session's row.
-- **Copy.** In this mode every day has its band, and the band ends in a copy button: the day's totals per task as tab-separated lines (task, project, client, h:mm, one column per platform, then a total line), ready for a spreadsheet.
+- **No copy button.** 0.1.17 ended each day's band with a button copying the day's totals per task; it was removed on 24 November 2026 as not needed. The conversions stay on each group's line.
 
 ## Today's toolbar, reorganised — 24 November 2026
 
@@ -912,4 +912,105 @@ Four groups of controls (period, views, grouping, state) were fighting over two 
 - **Which time, and how to see it** — the period bar: ‹ date › Today · Day · Week · Month, and on its right, in the free space, one switch of four views **as icons only** (`VIEWS`, `segmented_icons`): List · By task · Calendar · Timesheet, each with its name as tooltip and accessible label. Icons keep the switch at 4 × 36 px instead of a row of words. By task is a view of its own instead of a second switch; choosing Timesheet keeps the period a week.
 - **What happened** — the summary row: the total and "tracked · N sessions", then the state of the sessions **as words** when there is nothing to do ("✔ All sessions completed" in green, "● A session is still running" in grey), and as the status button only when there is ("! 2 sessions need details ›").
 - When the views don't fit on the period bar (`period::status_fits`), they move to the right of the summary row (`views_in_summary`); when that is too narrow too, to a row of their own under it.
+
+
+## The compact window's day calendar — 24 November 2026
+
+The week's calendar on Today, for one day, in the compact window.
+
+- **Switch.** Above the sessions, three icons (`VIEWS` in `compact.rs`, `segmented_icons`): List · By task · Calendar, then "+ Add past time" on the right. No title beside them: the switch says which view it is, and a title would not fit at the window's usual width. The choice is saved on the device (`compact_calendar`, with `list_by_task` for the first two).
+- **The day.** A row: ‹ › (36 px icon buttons), the day as the bands name it (Today, Yesterday, then the weekday) with its date in mono, "Today" as a link when another day is shown, and the day's total on the right. The day shown is not saved: the window always comes back to today.
+- **The hours.** Today's calendar (`today::timeline_in`) without its day header, filling the rest of the window and scrolling on its own; the controls above stay put even in a short window. Everything works as in the full window: a click on a block opens the small editor by the block (`edit_anchor`), a click on an empty hour opens "Add session" at that time, blocks drag and stretch in the calendar step, the red line marks now.
+- "+ Add past time" in the calendar adds on the day shown.
+
+## Whole minutes after an edit; ⇄ in the compact window — 24 November 2026
+
+- **Whole minutes.** A session whose time is changed (start, end or duration, in either editor, or dragged in the calendar) is saved in whole minutes: the seconds of the end left as it was go too, so 09:12:21–09:30:47 with the start set to 09:10 becomes 09:10–09:30, a round 20 minutes, and ↑/↓ on the minutes always land on round values. A session nothing time-related was changed in keeps every second (`edit::resolve`).
+- **⇄ in the compact window.** Each session's row, and a task's line in By task, has the conversions button left of Continue, as in Today's list (`today::conversions_icon`): hover shows each platform's value, a click opens the card where one is copied. Only when there are platforms; the title column gives up the room.
+
+## Tags as one list — 24 November 2026 (phase 1)
+
+Tags were free words typed with commas in the full editor only: a typo made a second tag, they could not be set from the timer, nor renamed. Now (brief confirmed with `/impeccable shape`; Toggl's picker and tag management as the reference the person named):
+
+- **One list, synced.** `Db.tags` holds `Tag` records (id, name, rev, deleted), merged between devices like the others. A session still carries the tag's **name** (`TimeEntry.tags`), as before, so older versions keep reading it and nothing is rewritten on update; rename, merge and delete rewrite the sessions concerned in one save. Names are unique regardless of case and cleaned (`clean_tag`: no leading #, single spaces, at most 40 characters). A tag created from a name gets the stable id `tag:<name in lower case>`, so two devices creating the same tag make one record.
+- **Migration.** `Store::ensure_tags` adds every name found on sessions to the list (the first spelling met wins; "Meeting" and "meeting" are one tag), at start and after each sync, saving only when something was missing. `put_entry` spells a session's tags as the list does and adds new names, so imports and older devices can't bring back duplicates.
+- **The picker** (`tag_picker`, one component). From a field: the chosen tags as chips (quiet fill, 1 px line, radius 11, no colour: colour belongs to projects), "+N" when they don't fit, "Add tags" when empty. From a link: "#a #b" or "Tags" as the third underlined word after Project · Client. The menu: a search that also creates ("+ Create tag “…”"), then the tags with square check boxes, chosen first then A–Z. Ticking keeps the menu open, so several tags are set at once; Enter ticks the tag the search names, or creates it.
+- **Where.** The timer's line under the task (Today and the compact window, before Start and while running), Edit session (in place of the comma field), Add past time, and the compact window's small editor.
+- **#tag in the task field.** A last word starting with # (not a work item's #number) turns the suggestions into tags: names starting with the word first, then the most recently used, and "+ Create tag “word”". Choosing one, or Enter for the first, adds it and takes the word out of the text; the word never becomes part of the task's name.
+- **Work › Tags.** A fourth tab (the tabs become a select field where four don't fit). Each tag with "N sessions · time", Rename and Delete… on its row. Rename happens in the row (Enter saves, Esc cancels); a name another tag has asks above the table to merge the two ("Merge" / "Keep both"). Delete asks how many sessions it leaves; the toast's Undo brings the tag back on those sessions (`Store::last_tag_removed`). "+ New tag" opens the same question panel with a name field.
+- Phase 2, not yet: filtering Today and Statistics by tag, tagging several sessions at once, tags in Report Time's details and the assistant's table by tag.
+
+### Tags on a group of sessions: said once
+
+Where sessions are shown gathered (a task in Work › Tasks and in a project, a value in Report Time), their tags are said once for the group, not on every session:
+
+- **Collapsed row:** the three most used tags in the grey line, then "+N", right after project and client and before the Azure DevOps details, which give way first when the line is cut.
+- **Open detail:** a "Tags" row with every tag and how many sessions carry it (`#sviluppo 6 · #iOS 6 · #code review 2`). With a single session the counts are left out.
+- **Today's By task (and the compact window's):** a group's grey line ends with its most used tags, then "+N"; under an open group a session leaves out the tags every session of the group carries.
+- **Session list:** a session shows only the tags that set it apart — those not on every session of the group — in the secondary colour after its note.
+
+In Report Time the tags stay informative: they change no code and no value.
+
+### Filtering by tag — 24 November 2026 (phase 2, first part)
+
+- **One rule:** `TagFilter` (a tag, any capitals, or Untagged) and `summarize_tagged`; Today and Statistics use the same test, so their totals agree.
+- **Today:** the filter narrows everything under the period bar at once — total, project bar, list — because a total that disagrees with the list below it reads as a bug. The timesheet grid is left out: its cells are typed totals, and a filtered cell would invite typing a partial number.
+- **Where it sits:** at the right end of the total's row, with what it changes (the views join it there when the period bar has no room). While it is on, an × beside it clears it; the trigger itself names the tag.
+- **From a row:** each `#tag` in a session's grey line is a target — underlined on hover, a tooltip saying what the click does — and a click filters instead of opening the editor. Tags cut off by the line's end are not targets.
+- **Nothing left:** an empty state names the tag and offers "Show all sessions".
+- **Statistics:** a tag menu beside the project menu, project first in both layouts of the bar.
+- **Work › Tasks:** a fifth menu after Estimates. A task has the tags of its sessions: a tag keeps the tasks with at least one session carrying it; No tags keeps those with no tagged session (a task never tracked included). "Clear filters" and opening a task from elsewhere reset it like the others.
+
+### Ticking several sessions in Today — 24 November 2026 (phase 2)
+
+- **Where the box is:** in the project dot's place, so ticking moves nothing. It shows under the pointer, and on every row while any session is ticked. ⌘/Ctrl-click on a row ticks too.
+- **While ticking:** a click on a row ticks it instead of opening the editor — the mode is visible (boxes on every row, the bar) and Esc or × ends it.
+- **The bar:** the list's header turns into it, in the same 36 px, so the list does not jump. A box for all (a dash when some), "N sessions selected", Add tag (every tag, a new one can be created) and Remove tag (only the tags on the ticked sessions, with how many carry each). Each menu acts at once and closes; the ticked sessions stay ticked for the next action.
+- **One save, one Undo:** `Store::tag_entries` changes every session in one save and keeps them as they were for Undo; sessions in a locked period are skipped and the message says how many.
+- **Scope:** Today's list (also the sessions under an open group in By task). Not the compact window, as agreed in the brief.
+
+### The compact window's timer: one skeleton, stopped or running — 24 November 2026
+
+Stopped, the compact timer used to be a labelled form (Description, a Project menu, Start beside it) with no client, while the running one was the task, its links, the time and the buttons. Now both share one skeleton: the task field; **project · client · Tag** as links (the same menus as Today's timer, with the client narrowing the projects); the time (0:00:00 in the secondary colour while stopped); then Start, or Pause and Stop. Starting moves nothing on screen.
+
+### Sessions under an open group read as its children — 24 November 2026
+
+Under an open group (By task, in Today and in the compact window) the sessions used to repeat the whole row — dot, task title, project, client — at the group's own left edge, with a faint line in the margin: they read as siblings. Now:
+
+- **Indent:** their content starts 40 px in (20 in the compact window), clearly right of the group's title.
+- **Branch:** a line drops from under the group and turns into each session; the last one ends it with a rounded elbow. While sessions are being ticked, a session's box sits on that line, in the column where every row has its box.
+- **Only what is its own:** no dot, no task title, no project or client (all on the group). The session's note leads, in regular weight, with the task's name stripped from its start ("Migrazione delle anagrafiche: controllo dei duplicati" → "Controllo dei duplicati"); "No note" in the secondary colour when it adds nothing. Under it, only the tags the other sessions lack and its observations; with nothing to add the note sits on the row's middle.
+- **The group's time column:** no times — first start → last end read as one stretch of work, and listing slots crowded the row. It says how many sessions ("3 sessions"); opened, each session shows its own times. The count is said there only, not again in the grey line. The branch's rounded last corner is one function for both windows.
+- **Dividers** inside the group start at the nested edge, so the group and its sessions read as one block; the one after the last session runs full width again.
+
+### Tags for AI assistants (MCP) — 24 November 2026 (phase 2, last part)
+
+- Session rows carry their tags in the list's spelling, each once, so "Bug" and "bug" are one row in a summary by tag.
+- `tag: "(no tag)"` filters the sessions without any, matching the "(no tag)" group and Today's and Statistics' **No tags**.
+- `devtrack_catalog` with `kind: "tags"`: the list, unused tags included, with sessions and time on each, most used first.
+- `devtrack_report_tables` with `kind: "tag"`: By tag, then By tag and project. The weekly report adds a By tag table only when the period's sessions have tags.
+- The glossary says what tags are, that sessions of one task can differ, that a session with several tags counts under each, and that tags change no reported value.
+
+### Tags: three fixes from the review — 24 November 2026
+
+- **The filtered calendar keeps every session.** Hidden ones left their hours looking free, and a click or a drag there made an overlap. Sessions out of the filter now stay, under a veil of the page's colour (still clickable); the day's total in the calendar's header is the filter's, matching the summary.
+- **Ticking without the mouse.** **Select / Deselect** in each row's ··· menu, and Space on the focused row (Enter still opens it). The menu item is also how the feature is found: the hover-only box could go unnoticed.
+- **What can be clicked shows it.** The #tags in a row's grey line, which filter on a click, are a step brighter than the words around them (between the secondary and the main text colour): told apart without colour, as the brief asks for neutral tags.
+
+### Tags: the review's middle findings — 24 November 2026
+
+- **Work to do is never filtered away.** "N sessions need details" counts the whole period whatever the tag filter; **Show only these** lifts the filter, since those sessions may lie outside it.
+- **The compact window's session rows** show their tags after project and client, as Today's rows do (nested rows keep only their own times).
+- **Near spellings meet.** `tag_key` (letters and digits, lower case) makes "code review", "code-review" and "CodeReview" one search: every tag search finds the existing tag, and a near copy is not offered as new (`Db::tag_like`). Saving stays strict: two names that differ only by a dash can still both exist when chosen on purpose.
+- **Statistics › Tags** (already there) now follows the page: project and tag filters apply, one row per tag as the list spells it, **No tags** last, a share of the tracked time beside each, and a click on a row filters the page by it.
+- **Work › Tasks** names its tag menu like its neighbours: "Tag: #bug".
+- **The guide** says what happens when a tag is renamed on one device while another still uses the old name, and how to merge them back.
+
+### Tags: the review's low findings — 24 November 2026
+
+- **"+N" opens on the pointer.** Wherever a line shows the first tags and "+N" (Work › Tasks, Today's groups, the compact window's groups, Report Time), the pointer over it shows the same line with every tag (`all_tags_hover`).
+- **Bigger targets for row #tags.** A tag in a session's grey line takes clicks a little above and below the 12 px text and half a space to each side, so two neighbours never overlap and the title above stays the editor's.
+- **Work › Tags says what it counts:** "sessions and time over everything tracked", beside the number of tags; its search finds near spellings like every tag search.
+- **Not done, on purpose:** Undo stays the last action only, while its message shows, as everywhere in the app; more would need a history of changes, a piece of work of its own.
+- Statistics' "No project" row is translated (it was not, before the tags work).
 

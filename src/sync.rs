@@ -101,6 +101,7 @@ pub fn merge(store: &mut Store, other: &Db, from: &str, out: &mut SyncOutcome) {
     merge_map(&mut db.profiles, &other.profiles, &mut cx, "profile", &|p: &TimesheetProfile| p.name.clone());
     merge_map(&mut db.marks, &other.marks, &mut cx, "report confirmation", &|m: &ReportedMark| m.date_label.clone());
     merge_map(&mut db.integrations, &other.integrations, &mut cx, "connection", &|i: &IntegrationConfig| i.name.clone());
+    merge_map(&mut db.tags, &other.tags, &mut cx, "tag", &|t: &Tag| t.name.clone());
     if other.settings.rev > db.settings.rev {
         db.settings = other.settings.clone();
         cx.out.received += 1;
@@ -109,6 +110,8 @@ pub fn merge(store: &mut Store, other: &Db, from: &str, out: &mut SyncOutcome) {
     store.observe(&newest);
     // a project written by an older version carries only the client text: map it back
     store.migrate_clients();
+    // tags on sessions from an older version (or typed before the list existed) join the list
+    store.ensure_tags();
 }
 
 /// One active timer: the latest started keeps running; the others stop where it started.

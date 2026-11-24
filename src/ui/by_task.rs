@@ -1,13 +1,13 @@
 //! A day's sessions grouped by task: one line per task (with its project) and the day's total on
-//! it, for reading and copying the hours per task. Used by Today's list and the compact window.
+//! it, for reading the hours per task. Used by Today's list and the compact window.
 //!
 //! - Sessions of the same task and project go together. A session without a task but with a
 //!   note goes with the others of the same project and note; one that still needs details stays
 //!   alone, so the grouping never hides what has to be completed.
 //! - Groups come largest first; the day's sessions keep their time order inside a group.
 
-use devtrack_core::model::{Db, Id, TimeEntry, TimesheetProfile};
-use devtrack_core::report::{convert, needs_completion};
+use devtrack_core::model::{Id, TimeEntry};
+use devtrack_core::report::needs_completion;
 
 /// One task on one day: its sessions (piece of each on that day: entry, start, end).
 #[derive(Clone, Debug)]
@@ -58,32 +58,6 @@ pub fn group(pieces: &[(TimeEntry, i64, i64)]) -> Vec<TaskGroup> {
     out
 }
 
-/// The day's totals per task, ready to paste into a spreadsheet: a header, then one line per
-/// task with its project, client, duration (h:mm) and the value for each platform.
-pub fn day_text(db: &Db, groups: &[TaskGroup], profiles: &[TimesheetProfile], title: impl Fn(&TimeEntry) -> String) -> String {
-    let clean = |s: String| s.replace(['\t', '\n'], " ");
-    let mut head = vec![super::i18n::tr("Task"), super::i18n::tr("Project"), super::i18n::tr("Client"), super::i18n::tr("Duration")];
-    head.extend(profiles.iter().map(|p| p.name.clone()));
-    let mut lines = vec![head.join("\t")];
-    for g in groups {
-        let e = g.latest();
-        let project = db.project(&e.project_id);
-        let mut cells = vec![
-            clean(title(e)),
-            project.map(|p| clean(p.name.clone())).unwrap_or_default(),
-            project.map(|p| clean(db.client_name(p))).unwrap_or_default(),
-            devtrack_core::timefmt::format_report(g.total, devtrack_core::model::ReportFormat::HoursMinutes, 2, false),
-        ];
-        cells.extend(profiles.iter().map(|p| convert(p, g.total)));
-        lines.push(cells.join("\t"));
-    }
-    let total: i64 = groups.iter().map(|g| g.total).sum();
-    let mut last = vec![super::i18n::tr("Total"), String::new(), String::new(), devtrack_core::timefmt::format_report(total, devtrack_core::model::ReportFormat::HoursMinutes, 2, false)];
-    last.extend(profiles.iter().map(|p| convert(p, total)));
-    lines.push(last.join("\t"));
-    lines.join("\n") + "\n"
-}
-
 /// Stable id of a group on a day, for its expanded state.
 pub fn group_id(day: chrono::NaiveDate, g: &TaskGroup) -> Id {
     format!("{}|{}", day, g.key)
@@ -128,18 +102,5 @@ mod tests {
         let g = group(&day);
         assert_eq!(g.len(), 5, "t1/p1, t1/p2, c, d, call/p1");
         assert!(g.iter().any(|x| x.pieces.len() == 2 && x.pieces[0].0.description.trim().eq_ignore_ascii_case("call")));
-    }
-
-    #[test]
-    fn the_day_copies_as_tab_separated_lines_with_a_total() {
-        let mut db = Db::default();
-        db.projects.insert("p".into(), devtrack_core::model::Project { id: "p".into(), name: "Portal".into(), ..Default::default() });
-        let day = vec![entry("a", Some("t1"), Some("p"), "", 0, 5400), entry("b", Some("t1"), Some("p"), "", 9000, 1800)];
-        let g = group(&day);
-        let text = day_text(&db, &g, &[], |_| "Login".into());
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[1], "Login\tPortal\t\t2:00");
-        assert!(lines[2].ends_with("\t2:00"));
     }
 }

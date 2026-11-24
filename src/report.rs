@@ -247,6 +247,11 @@ pub struct Summary {
 }
 
 pub fn summarize(db: &Db, p: &Period, now: i64, project_filter: Option<&Id>) -> Summary {
+    summarize_tagged(db, p, now, project_filter, None)
+}
+
+/// As `summarize`, keeping only the sessions a tag filter lets through.
+pub fn summarize_tagged(db: &Db, p: &Period, now: i64, project_filter: Option<&Id>, tag_filter: Option<&TagFilter>) -> Summary {
     let mut s = Summary::default();
     let mut day: BTreeMap<NaiveDate, i64> = p.days().into_iter().map(|d| (d, 0)).collect();
     let mut proj: BTreeMap<Option<Id>, i64> = BTreeMap::new();
@@ -257,6 +262,9 @@ pub fn summarize(db: &Db, p: &Period, now: i64, project_filter: Option<&Id>) -> 
             if e.project_id.as_ref() != Some(f) {
                 continue;
             }
+        }
+        if tag_filter.is_some_and(|f| !f.matches(e)) {
+            continue;
         }
         s.entries += 1;
         for (date, a, b) in day_pieces(e, now) {
@@ -942,5 +950,22 @@ mod tests {
         let mut exact = TimesheetProfile::conversion("Exact");
         exact.round_scope = RoundScope::None;
         assert_eq!(convert(&exact, secs), "2.57");
+    }
+
+    #[test]
+    fn a_tag_filter_counts_only_its_sessions_and_untagged_counts_the_rest() {
+        let db = crate::sample::build_state(crate::store::now_secs(), crate::sample::DemoState::Varied, false);
+        let now = crate::store::now_secs();
+        let p = Period::containing(PeriodKind::Month, crate::report::today(), true);
+        let all = summarize(&db, &p, now, None);
+        let bug = summarize_tagged(&db, &p, now, None, Some(&TagFilter::Tag("BUG".into())));
+        let dev = summarize_tagged(&db, &p, now, None, Some(&TagFilter::Tag("sviluppo".into())));
+        let none = summarize_tagged(&db, &p, now, None, Some(&TagFilter::Untagged));
+        assert!(bug.entries > 0, "\"Bug\" and \"bug\" are one tag");
+        assert!(dev.total > bug.total && dev.total < all.total);
+        assert!(none.entries >= 1, "the unclassified call has no tags");
+        // every session is either untagged or has some tag: the two sides add up
+        let tagged = db.live_entries().filter(|e| !TagFilter::Untagged.matches(e) && p.contains(local_date(e.start))).count();
+        assert_eq!(none.entries + tagged, all.entries);
     }
 }

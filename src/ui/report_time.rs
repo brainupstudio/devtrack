@@ -329,7 +329,8 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
                                 if r.on_hover_text(&what.title).clicked() { *select = Some(l.key.clone()); }
                             });
                             if !what.sub.is_empty() {
-                                ui.add(egui::Label::new(mixed_job(&what.sub, 12.0, c.text2, sans(12.0), mono_font(12.0))).truncate()).on_hover_text(&what.sub);
+                                // one tip, its own: egui's for a cut line would stack under it
+                                cut_line(ui, mixed_job(&what.sub, 12.0, c.text2, sans(12.0), mono_font(12.0)), Some(what.hover.clone().unwrap_or_else(|| what.sub.clone())));
                             }
                         });
                     };
@@ -483,6 +484,8 @@ struct What {
     code: bool,
     missing: bool,
     sub: String,
+    /// The line with every tag in place of "+N", for the pointer.
+    hover: Option<String>,
 }
 
 /// The name of the first column: what one row stands for in this destination.
@@ -516,29 +519,38 @@ fn describe(app: &App, pr: &TimesheetProfile, l: &SheetLine) -> What {
         // the code is the thing to enter; the projects it gathers explain it
         Grouping::DayCode | Grouping::WeekCode => {
             if l.code.is_empty() {
-                What { dot: None, title: tr("No code"), code: false, missing: true, sub: with_clients.join(", ") }
+                What { dot: None, title: tr("No code"), code: false, missing: true, sub: with_clients.join(", "), hover: None }
             } else {
-                What { dot: None, title: code, code: true, missing: false, sub: with_clients.join(", ") }
+                What { dot: None, title: code, code: true, missing: false, sub: with_clients.join(", "), hover: None }
             }
         }
         // the project is the title; its client comes first under it, then the code
         Grouping::DayProject => {
             let sub = [first_client.clone().unwrap_or_default(), code].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · ");
-            What { dot: first_color, title: names.first().cloned().unwrap_or(tr("No project")), code: false, missing: false, sub }
+            What { dot: first_color, title: names.first().cloned().unwrap_or(tr("No project")), code: false, missing: false, sub, hover: None }
         }
         Grouping::DayTask => {
             let title = l.tasks.first().cloned().or_else(|| l.sessions.iter().map(|s| s.description.clone()).find(|d| !d.trim().is_empty())).unwrap_or(tr("Untitled session"));
             let mut sub = with_clients.join(", ");
             if !l.code.is_empty() { sub.push_str(&format!(" · {}", code)); }
-            What { dot: first_color, title, code: false, missing: false, sub }
+            What { dot: first_color, title, code: false, missing: false, sub, hover: None }
         }
     };
+    // the tags of the sessions behind the value, once (informative: they change no value)
+    let entries: Vec<TimeEntry> = l.sessions.iter().filter_map(|s| db.entries.get(&s.entry_id).cloned()).collect();
+    let counts = super::activities::tag_counts(db, &entries);
+    if !counts.is_empty() {
+        if !what.sub.is_empty() { what.sub.push_str(" · "); }
+        what.sub.push_str(&super::activities::tag_summary(&counts));
+    }
     // only a real rule is worth a word here; dropped seconds are explained in the details
     let ex = explain_value(pr, l.actual, l.reported);
     if ex.rule_diff != 0 {
         if !what.sub.is_empty() { what.sub.push_str(" · "); }
         what.sub.push_str(&trf("rounded {}", &[&signed_exact(ex.rule_diff)]));
     }
+    // the line as it ends, with every tag in place of "+N"
+    what.hover = super::activities::all_tags_hover(&what.sub, &counts);
     what
 }
 
@@ -587,6 +599,11 @@ fn line_detail(app: &mut App, ui: &mut egui::Ui, pr: &TimesheetProfile, l: &Shee
     let w = ui.available_width();
     ui.label(RichText::new(plural(l.sessions.len() as i64, "{} session in this value", "{} sessions in this value")).font(medium(14.0)));
     let several = line_projects(app, l).len() > 1;
+    let entries: Vec<TimeEntry> = l.sessions.iter().filter_map(|s| app.store.db.entries.get(&s.entry_id).cloned()).collect();
+    let counts = super::activities::tag_counts(&app.store.db, &entries);
+    if !counts.is_empty() {
+        super::activities::tag_count_row(ui, &counts, entries.len());
+    }
     for s in &l.sessions {
         let entry = app.store.db.entries.get(&s.entry_id).cloned();
         let interval = format!("{} → {}", clock_text(s.start, h24), if s.running { tr("now") } else { clock_text(s.end, h24) });
@@ -608,8 +625,13 @@ fn line_detail(app: &mut App, ui: &mut egui::Ui, pr: &TimesheetProfile, l: &Shee
                 ui.label(mixed_job(&interval, 12.0, c.text2, sans(12.0), mono_font(12.0)));
                 ui.scope(|ui| {
                     ui.set_max_width((w - 300.0).max(120.0));
-                    // egui shows the whole title on hover only when it is cut
-                ui.add(egui::Label::new(RichText::new(&title).size(13.0)).truncate());
+                    // egui shows the whole title on hover only when it is cut; the tags that set
+                    // this session apart follow it
+                    let job = match &entry {
+                        Some(e) => super::activities::note_with_own_tags(ui, &app.store.db, &title, e, &counts, entries.len()),
+                        None => RichText::new(&title).size(13.0).into(),
+                    };
+                    ui.add(egui::Label::new(job).truncate());
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let edit = link_btn(ui, "Edit");

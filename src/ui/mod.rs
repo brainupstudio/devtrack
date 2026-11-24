@@ -572,6 +572,12 @@ impl App {
                 }
                 Page::Today
             }
+            // the Tasks tab filtered by a tag
+            "tasks-tag" => {
+                self.act.tab = activities::ActTab::Tasks;
+                self.act.all_tag = Some(TagFilter::Tag("bug".into()));
+                Page::Activities
+            }
             // the Tasks tab with the most tracked task open in place: estimate, sessions
             "tasks-open" => {
                 let db = &self.store.db;
@@ -620,6 +626,36 @@ impl App {
                 Page::ReportTime
             }
             "statistics" | "stats" | "dashboard" => Page::Statistics,
+            // the tag filter on: Today's week with #sviluppo only, Statistics of the month likewise
+            "today-tag" => {
+                self.today.period = Period::containing(PeriodKind::Week, devtrack_core::report::today(), self.store.db.settings.week_starts_monday);
+                self.today.tag_filter = Some(TagFilter::Tag("sviluppo".into()));
+                Page::Today
+            }
+            // three sessions of the day ticked: the list's header becomes the selection bar
+            "today-select" => {
+                let period = self.today.period;
+                let mut es: Vec<TimeEntry> = devtrack_core::report::entries_in(&self.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();
+                es.sort_by_key(|e| e.start);
+                self.today.selected = es.iter().skip(1).take(3).map(|e| e.id.clone()).collect();
+                Page::Today
+            }
+            // the calendar of the day with the filter on: the others faint, not gone
+            "today-tag-cal" => {
+                self.today.timeline = true;
+                self.today.tag_filter = Some(TagFilter::Tag("sviluppo".into()));
+                Page::Today
+            }
+            // the month, for its sections down to Tags
+            "stats-month" => {
+                self.stats.period = Period::containing(PeriodKind::Month, devtrack_core::report::today(), self.store.db.settings.week_starts_monday);
+                Page::Statistics
+            }
+            "stats-tag" => {
+                self.stats.period = Period::containing(PeriodKind::Month, devtrack_core::report::today(), self.store.db.settings.week_starts_monday);
+                self.stats.tag = Some(TagFilter::Tag("sviluppo".into()));
+                Page::Statistics
+            }
             "settings" => Page::Settings,
             "update" => {
                 // a newer version out, as a check would leave it
@@ -702,6 +738,21 @@ impl App {
                 self.today.timeline = true;
                 Page::Today
             }
+            // the session editor with its tag menu open
+            "edit-tags" => {
+                let mut list: Vec<TimeEntry> = self.store.db.live_entries().filter(|e| !e.is_running()).cloned().collect();
+                list.sort_by_key(|e| std::cmp::Reverse(e.start));
+                if let Some(mut e) = list.first().cloned() {
+                    for t in ["meeting", "frontend", "review", "support", "urgent"] {
+                        self.store.create_tag(t);
+                    }
+                    e.tags = vec!["frontend".into(), "review".into()];
+                    self.store.put_entry(e.clone());
+                    today::open_edit(self, &e, None, false);
+                }
+                widgets::SHOT_OPEN_TAGS.store(true, std::sync::atomic::Ordering::Relaxed);
+                Page::Today
+            }
             "edit" | "edit-review" => {
                 let mut list: Vec<TimeEntry> = self.store.db.live_entries().filter(|e| !e.is_running()).cloned().collect();
                 list.sort_by_key(|e| (!devtrack_core::report::needs_completion(e), e.start));
@@ -725,6 +776,27 @@ impl App {
             }
             "clients" => {
                 self.act.tab = activities::ActTab::Clients;
+                Page::Activities
+            }
+            // Work › Tags with a few tags on the sample sessions; "-rename" and "-merge" show a
+            // tag being renamed in its row and the merge question
+            "tags" | "tags-rename" | "tags-merge" | "tags-delete" => {
+                let mut es: Vec<TimeEntry> = self.store.db.live_entries().filter(|e| !e.is_running()).cloned().collect();
+                es.sort_by_key(|e| e.start);
+                let sets: [&[&str]; 5] = [&["meeting"], &["frontend", "review"], &["support"], &["meeting", "client call"], &["frontend"]];
+                for (i, mut e) in es.into_iter().enumerate() {
+                    e.tags = sets[i % sets.len()].iter().map(|t| t.to_string()).collect();
+                    self.store.put_entry(e);
+                }
+                self.store.create_tag("urgent");
+                self.act.tab = activities::ActTab::Tags;
+                let id = |s: &Self, n: &str| s.store.db.tag_named(n).map(|t| t.id.clone()).unwrap_or_default();
+                self.act.tag_edit = match name {
+                    "tags-rename" => Some(activities::TagEdit::Rename(id(self, "frontend"), "Front-end".into())),
+                    "tags-merge" => Some(activities::TagEdit::Merge { from: id(self, "client call"), into: id(self, "meeting") }),
+                    "tags-delete" => Some(activities::TagEdit::Delete(id(self, "support"))),
+                    _ => None,
+                };
                 Page::Activities
             }
             "tasks" => {
@@ -850,11 +922,17 @@ impl App {
             }
             // the compact window's history scrolled part way, a day's band pinned (with --compact)
             // the list grouped by task; "-open" shows the sessions of the groups with more than one
+            // the compact window's day calendar (with --compact)
+            "compact-calendar" => {
+                self.store.local.compact_calendar = true;
+                Page::Today
+            }
             "by-task" | "by-task-open" => {
                 self.store.local.list_by_task = true;
                 if name == "by-task-open" {
                     let now = now_secs();
-                    let day = today_date();
+                    // the day the page shows
+                    let day = self.today.period.start;
                     let mut pieces = vec![];
                     for e in self.store.db.live_entries() {
                         for (d, a, b) in devtrack_core::report::day_pieces(e, now) {
@@ -1356,7 +1434,14 @@ impl App {
         };
         // an imported work item that already had a project keeps it
         let p = p.or_else(|| self.store.db.task(&t).and_then(|x| x.project_id.clone()));
-        self.store.start("", p, t, b);
+        let id = self.store.start("", p, t, b);
+        // the tags chosen before Start go with the session
+        if !d.tags.is_empty() {
+            if let Some(mut e) = self.store.db.entries.get(&id).cloned() {
+                e.tags = d.tags.clone();
+                self.store.put_entry(e);
+            }
+        }
         self.today.draft = today::Draft::default();
     }
 
@@ -2108,6 +2193,12 @@ impl eframe::App for App {
         // interface language: applied every frame, so a change never resets timers or drafts
         i18n::set_lang(i18n::LangPref::parse(&self.store.local.language).resolve());
         self.system_dark = ctx.system_theme().map(|t| t == egui::Theme::Dark);
+        // tooltips wrap inside the window: egui's 500 px is wider than the compact window, and a
+        // long one (a cut line shown whole) ran off its edge
+        let tip = (ctx.screen_rect().width() - 32.0).clamp(160.0, 500.0);
+        if ctx.style().spacing.tooltip_width != tip {
+            ctx.style_mut(|s| s.spacing.tooltip_width = tip);
+        }
         let dark = self.dark();
         // the window is see-through (for the compact editor's own window): its whole area gets the
         // app's background first, under the panels, so no hairline between panels shows through

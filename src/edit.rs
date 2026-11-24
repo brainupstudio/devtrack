@@ -63,6 +63,10 @@ pub fn resolve(fields: &TimeFields, original: &TimeFields, orig_start: i64, orig
     } else {
         local_time_of(date(&fields.end_date, "end_date")?, clock(&fields.end, "end")?)
     };
+    // Once the time is edited, the session is whole minutes: the part left as it was loses its
+    // seconds too, so changing the start of 09:12:21–09:30:47 to 09:10 gives 09:10–09:30 and a
+    // round 20 minutes, not 20:47. A session nothing was changed in keeps every second.
+    let (start, stop) = if start == orig_start && stop == old_stop { (start, stop) } else { (start - start.rem_euclid(60), stop - stop.rem_euclid(60)) };
     if stop < start {
         return Err(("end", "The end is before the start. If the session ends on a later day, change the end date.".to_string()));
     }
@@ -129,6 +133,28 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_time_leaves_no_seconds_on_either_end() {
+        // 09:12:21 to 09:30:47, the start moved to 09:10 (as ↑/↓ would): 09:10 to 09:30
+        let day = Local.with_ymd_and_hms(2026, 11, 24, 0, 0, 0).single().unwrap().timestamp();
+        let (a, b) = (day + 9 * 3600 + 12 * 60 + 21, day + 9 * 3600 + 30 * 60 + 47);
+        let orig = fields_for(a, Some(b));
+        let mut f = orig.clone();
+        f.start = "09:10".into();
+        let r = resolve(&f, &orig, a, Some(b)).unwrap();
+        assert_eq!(r.start, day + 9 * 3600 + 10 * 60);
+        assert_eq!(r.stop, Some(day + 9 * 3600 + 30 * 60));
+        // the end moved instead: the start loses its seconds too
+        let mut f = orig.clone();
+        f.end = "09:40".into();
+        let r = resolve(&f, &orig, a, Some(b)).unwrap();
+        assert_eq!(r.start, day + 9 * 3600 + 12 * 60);
+        assert_eq!(r.stop, Some(day + 9 * 3600 + 40 * 60));
+        // back to what it was: nothing changed, every second kept
+        let r = resolve(&orig, &orig, a, Some(b)).unwrap();
+        assert_eq!((r.start, r.stop), (a, Some(b)));
+    }
+
+    #[test]
     fn same_minute_session_with_seconds_is_kept() {
         // 12:51:25–12:51:52 (27 s) once became 23:59:35
         let (a, b) = (at((2026, 11, 17), 12, 51, 25), at((2026, 11, 17), 12, 51, 52));
@@ -169,7 +195,7 @@ mod tests {
         let mut f = orig.clone();
         f.end = "10:00".into();
         let r = resolve(&f, &orig, a, Some(b)).unwrap();
-        assert_eq!(r.start, a, "start untouched keeps its seconds");
+        assert_eq!(r.start, at((2026, 11, 9), 9, 2, 0), "the untouched start loses its seconds: whole minutes");
         assert_eq!(r.stop, Some(at((2026, 11, 9), 10, 0, 0)));
     }
 
@@ -213,7 +239,7 @@ mod tests {
         f.duration = "1:30".into();
         f.duration_edited = true;
         let r = resolve(&f, &orig, a, Some(b)).unwrap();
-        assert_eq!(r.stop, Some(a + 5400));
+        assert_eq!((r.start, r.stop), (at((2026, 11, 9), 9, 2, 0), Some(at((2026, 11, 9), 10, 32, 0))), "a round 1:30");
     }
 
     #[test]
@@ -227,13 +253,13 @@ mod tests {
     }
 
     #[test]
-    fn moving_the_start_keeps_an_untouched_end() {
+    fn moving_the_start_keeps_an_untouched_end_to_the_minute() {
         let (a, b) = (at((2026, 11, 9), 9, 2, 17), at((2026, 11, 9), 9, 19, 45));
         let orig = fields_for(a, Some(b));
         let mut f = orig.clone();
         f.start = "09:00".into();
         let r = resolve(&f, &orig, a, Some(b)).unwrap();
-        assert_eq!((r.start, r.stop), (at((2026, 11, 9), 9, 0, 0), Some(b)));
+        assert_eq!((r.start, r.stop), (at((2026, 11, 9), 9, 0, 0), Some(at((2026, 11, 9), 9, 19, 0))));
     }
 
     #[test]

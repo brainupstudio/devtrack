@@ -24,6 +24,8 @@ pub struct Draft {
     pub billable: bool,
     /// An Azure DevOps work item chosen from the suggestions: it becomes a task on Start.
     pub remote: Option<String>,
+    /// Tags chosen before Start (from the link under the task, or typed as #tag).
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -42,6 +44,7 @@ pub struct Past {
     pub errors: BTreeMap<&'static str, String>,
     /// The client shown: the project's, or one chosen to narrow the projects.
     pub client: Option<Id>,
+    pub tags: Vec<String>,
 }
 
 impl Past {
@@ -52,7 +55,7 @@ impl Past {
 
 impl Default for Past {
     fn default() -> Self {
-        Past { desc: String::new(), project: None, task: None, billable: false, date: today().format("%Y-%m-%d").to_string(), start: "09:00".into(), end_date: today().format("%Y-%m-%d").to_string(), end: "10:00".into(), dur: "1:00:00".into(), dur_edited: false, errors: BTreeMap::new(), client: None }
+        Past { desc: String::new(), project: None, task: None, billable: false, date: today().format("%Y-%m-%d").to_string(), start: "09:00".into(), end_date: today().format("%Y-%m-%d").to_string(), end: "10:00".into(), dur: "1:00:00".into(), dur_edited: false, errors: BTreeMap::new(), client: None, tags: vec![] }
     }
 }
 
@@ -93,11 +96,16 @@ pub struct TodayState {
     pub conv_request: bool,
     /// Task groups of the list showing their sessions (day and group key).
     pub open_groups: std::collections::HashSet<Id>,
+    /// Only the sessions with this tag (or with none), in the list and the calendar; the grid
+    /// always shows everything, since its cells are typed totals.
+    pub tag_filter: Option<TagFilter>,
+    /// Sessions ticked in the list, to tag or untag together.
+    pub selected: std::collections::BTreeSet<Id>,
 }
 
 impl TodayState {
     pub fn new(period: Period) -> Self {
-        TodayState { shot_pointer: Default::default(), draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false, open_groups: Default::default() }
+        TodayState { shot_pointer: Default::default(), draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false, open_groups: Default::default(), tag_filter: None, selected: Default::default() }
     }
 }
 
@@ -168,7 +176,7 @@ pub fn open_edit(app: &mut App, e: &TimeEntry, ctx: Option<&egui::Context>, _rev
 }
 
 /// The client of a project, when it still exists.
-fn client_of(db: &Db, project: &Option<Id>) -> Option<Id> {
+pub(super) fn client_of(db: &Db, project: &Option<Id>) -> Option<Id> {
     db.project(project).and_then(|p| p.client_id.clone()).filter(|c| db.client(&Some(c.clone())).is_some())
 }
 
@@ -202,7 +210,7 @@ fn work_fields(app: &mut App, ui: &mut egui::Ui, salt: &str, w: f32, project: &m
 /// What picking a task, a project or a client means for the other two: the client follows the
 /// project; a client chosen (or created) first narrows the projects to its own and picks the
 /// only one; a project created from a client's list belongs to it. True when anything changed.
-fn settle_work(app: &mut App, task_pick: Pick, project_pick: Pick, client_pick: Pick, project: &mut Option<Id>, mut task: Option<&mut Option<Id>>, chosen: &mut Option<Id>) -> bool {
+pub(super) fn settle_work(app: &mut App, task_pick: Pick, project_pick: Pick, client_pick: Pick, project: &mut Option<Id>, mut task: Option<&mut Option<Id>>, chosen: &mut Option<Id>) -> bool {
     let client_changed = match client_pick {
         Pick::Changed => true,
         Pick::Create(name) => {
@@ -297,6 +305,25 @@ pub(super) fn picked(app: &mut App, pick: Pick, project: &mut Option<Id>, task: 
     }
 }
 
+/// What a tag picker's answer means for the tags it edits: a new name is created first (once,
+/// spelled as the list will spell it) and added. True when the tags changed.
+pub(super) fn tag_picked(app: &mut App, pick: Pick, tags: &mut Vec<String>) -> bool {
+    match pick {
+        Pick::Changed => true,
+        Pick::Create(name) => match app.store.create_tag(&name) {
+            Some(n) => {
+                if !tags.iter().any(|t| t.eq_ignore_ascii_case(&n)) {
+                    tags.push(n.clone());
+                }
+                app.notify(trf("Tag “{}” created", &[&truncate(&n, 40)]));
+                true
+            }
+            None => false,
+        },
+        _ => false,
+    }
+}
+
 pub fn missing_text(e: &TimeEntry) -> &'static str {
     match (e.task_id.is_none() && e.description.trim().is_empty(), e.project_id.is_none()) {
         (true, true) => "Needs project and task",
@@ -369,15 +396,40 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     }
     let period = app.today.period;
     ui.add_space(GROUP_GAP - ROW_GAP);
-    let entries: Vec<TimeEntry> = entries_in(&app.store.db, &period, now).into_iter().cloned().collect();
+    let mut entries: Vec<TimeEntry> = entries_in(&app.store.db, &period, now).into_iter().cloned().collect();
     let incomplete = incomplete_in(app, &period);
     if app.store.db.live_entries().next().is_none() {
         ui.add_space(16.0);
         first_use(app, ui);
         return;
     }
+    // the tag filter narrows everything below it (total, project bar, list, calendar) at once
+    let filter = if app.today.timesheet { None } else { app.today.tag_filter.clone() };
+    let unfiltered = entries.len();
+    // the calendar keeps every session: one hidden by the filter would leave its hours looking
+    // free, and a click or a drag there would overlap it. Those out of the filter are dimmed.
+    let everything = entries.clone();
+    let calendar = app.today.timeline && period.kind != PeriodKind::Month;
+    if let Some(f) = &filter {
+        // what still needs details is counted on the whole period: a filter must not hide work
+        // to do
+        entries.retain(|e| f.matches(e));
+    }
     ui.add_space(12.0);
     ledger_summary(app, ui, &entries, &period, &incomplete);
+    if let (Some(f), true, true, false) = (&filter, entries.is_empty(), unfiltered > 0, calendar) {
+        ui.add_space(16.0);
+        let (title, body) = match f {
+            TagFilter::Tag(n) => (trf("No sessions with #{} in this period", &[n]), tr("Every session of this period has other tags. Show all sessions, or look at another period.")),
+            TagFilter::Untagged => (tr("Every session in this period has a tag"), tr("Show all sessions, or look at another period.")),
+        };
+        let mut clear = false;
+        empty_state(ui, Icon::Today, &title, &body, |ui| {
+            clear = secondary(ui, "Show all sessions").clicked();
+        });
+        if clear { app.today.tag_filter = None; }
+        return;
+    }
     ui.add_space(8.0);
     project_bar(app, ui, &entries, &period);
     let shown: Vec<TimeEntry> = entries.iter().filter(|e| !e.is_running() && (!app.today.only_incomplete || needs_completion(e))).cloned().collect();
@@ -386,7 +438,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
             timesheet(app, ui, &entries, &period);
         });
     } else if app.today.timeline && period.kind != PeriodKind::Month {
-        timeline(app, ui, &entries, &period);
+        timeline(app, ui, &everything, &period);
     } else {
         let list = egui::ScrollArea::vertical().id_salt("ledger").auto_shrink([false, false]).show(ui, |ui| {
             ledger(app, ui, &shown, &period);
@@ -468,6 +520,8 @@ fn session_panel(app: &mut App, ui: &mut egui::Ui) {
         let mut started_link = None;
         let mut a = Pick::None;
         let mut cl = Pick::None;
+        let mut tag_pick = Pick::None;
+        let mut tags = running.as_ref().map(|e| e.tags.clone()).unwrap_or_else(|| app.today.draft.tags.clone());
         ui.add_space(6.0);
         row(ui, 20.0, |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -476,6 +530,8 @@ fn session_panel(app: &mut App, ui: &mut egui::Ui) {
             app.geometry.rows.push(("start row · project".into(), ui.min_rect()));
             ui.label(RichText::new("  ·  ").size(13.0).color(c.text2));
             cl = client_select_with(ui, (salt, "client"), &app.store.db, &mut chosen, Trigger::Link);
+            ui.label(RichText::new("  ·  ").size(13.0).color(c.text2));
+            tag_pick = tag_picker(ui, (salt, "tags"), &app.store.db, &mut tags, Trigger::Link);
             // a work item from Azure DevOps with no project: say it, in words and amber
             let from_devops = match &running {
                 Some(e) => app.store.db.task(&e.task_id).is_some_and(|t| t.source == SOURCE_AZURE),
@@ -492,6 +548,13 @@ fn session_panel(app: &mut App, ui: &mut egui::Ui) {
         });
         let changed = settle_work(app, Pick::None, a, cl, &mut proj, None, &mut chosen);
         ui.data_mut(|d| d.insert_temp(client_key, chosen));
+        if tag_picked(app, tag_pick, &mut tags) {
+            if running.is_some() {
+                app.store.update_running(|x| x.tags = tags.clone());
+            } else {
+                app.today.draft.tags = tags;
+            }
+        }
         let task = running.as_ref().map(|e| e.task_id.clone()).unwrap_or_else(|| app.today.draft.task.clone());
         if let Some(r) = started_link {
             // the shortcut and the menu open it here too, under the link that names the start
@@ -545,6 +608,26 @@ pub enum Suggest {
     LookUp(String),
     /// Read the assigned work items again (offered when the list is old or unreachable).
     Refresh,
+    /// A tag, for the word typed after # (the session gets it; the word leaves the text).
+    Tag(String),
+    /// A tag that doesn't exist yet: created when chosen.
+    NewTag(String),
+}
+
+/// The text and the tag being typed at its end ("Login fix #fro" → ("Login fix", "fro")): the
+/// last word, when it starts with # and isn't a work item's #number. None when there is none.
+pub fn tag_token(text: &str) -> Option<(String, String)> {
+    let t = text.trim_end();
+    if text.ends_with(' ') && !t.is_empty() {
+        return None;
+    }
+    let start = t.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    let word = &t[start..];
+    let tag = word.strip_prefix('#')?;
+    if !tag.is_empty() && tag.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some((t[..start].trim_end().to_string(), tag.to_string()))
 }
 
 /// What Azure DevOps adds to the suggestions: work items not yet tasks, a lookup in progress,
@@ -565,6 +648,22 @@ impl RemoteSuggest {
 
 /// Tasks, then Azure DevOps work items not yet in DevTrack, then projects, matching the text.
 pub(super) fn suggestions(db: &Db, q: &str, remote: Option<&RemoteSuggest>) -> Vec<Suggest> {
+    // a #word at the end: tags only, the most recent first, then A–Z; a new name can be created
+    if let Some((_, word)) = tag_token(q) {
+        let w = word.to_lowercase();
+        let recent = db.recent_tags(50);
+        let rank = |n: &str| recent.iter().position(|r| r.eq_ignore_ascii_case(n)).unwrap_or(usize::MAX);
+        let mut found: Vec<&Tag> = db.live_tags().into_iter().filter(|t| super::widgets::tag_matches(&t.name, &w)).collect();
+        // names that start with the word before those that only contain it
+        found.sort_by_key(|t| (!t.name.to_lowercase().starts_with(&w), rank(&t.name), t.name.to_lowercase()));
+        let mut out: Vec<Suggest> = found.into_iter().take(8).map(|t| Suggest::Tag(t.name.clone())).collect();
+        let clean = clean_tag(&word);
+        // a near copy of a tag already there is not offered as new: that tag is in the list
+        if !clean.is_empty() && db.tag_like(&clean).is_none() {
+            out.push(Suggest::NewTag(clean));
+        }
+        return out;
+    }
     let raw = q.trim().to_string();
     let q = q.trim().trim_start_matches('#').to_lowercase();
     if q.is_empty() {
@@ -646,9 +745,11 @@ pub(super) fn description(app: &mut App, ui: &mut egui::Ui, running: Option<&Tim
         Some(e) => {
             if r.changed() { app.today.run_desc = Some((e.id.clone(), text.clone())); }
             let current = app.store.db.task(&e.task_id).map(|t| t.display()).unwrap_or_else(|| e.description.clone());
-            if r.lost_focus() && text.trim() != current.trim() {
+            // a #tag being typed is not part of the task's name
+            let named = tag_token(&text).map(|(rest, _)| rest).unwrap_or_else(|| text.clone());
+            if r.lost_focus() && named.trim() != current.trim() {
                 // the name typed is the task: an existing one of the project, or a new one
-                let name = text.trim().to_string();
+                let name = named.trim().to_string();
                 if !name.is_empty() {
                     let tid = app.task_named(e.project_id.clone(), &name);
                     app.store.update_running(|x| x.task_id = Some(tid.clone()));
@@ -658,8 +759,10 @@ pub(super) fn description(app: &mut App, ui: &mut egui::Ui, running: Option<&Tim
         }
         None => {
             if r.changed() {
-                // typing another name leaves the chosen task: a new one is made on start
-                if app.store.db.task(&app.today.draft.task).is_some_and(|t| t.display() != text) {
+                // typing another name leaves the chosen task: a new one is made on start (a
+                // #tag typed after it doesn't count)
+                let named = tag_token(&text).map(|(rest, _)| rest).unwrap_or_else(|| text.clone());
+                if app.store.db.task(&app.today.draft.task).is_some_and(|t| t.display() != named.trim()) {
                     app.today.draft.task = None;
                 }
                 // the same for a work item chosen from Azure DevOps
@@ -684,6 +787,32 @@ pub fn suggest_under(app: &mut App, ui: &mut egui::Ui, r: &egui::Response, rect:
     let (choice, enter_start) = suggest_pick(&app.store.db, remote.as_ref(), ui, "session-suggest", r, rect, &text, running.is_none(), width);
     if let Some(s) = choice {
         match (s, running) {
+            (Suggest::Tag(name) | Suggest::NewTag(name), running) => {
+                // the session gets the tag; the #word leaves the text, and typing goes on
+                let name = if app.store.db.tag_named(&name).is_some() { Some(name) } else {
+                    let n = app.store.create_tag(&name);
+                    if let Some(n) = &n { app.notify(trf("Tag “{}” created", &[&truncate(n, 40)])); }
+                    n
+                };
+                let rest = tag_token(&text).map(|(rest, _)| rest).unwrap_or_else(|| text.clone());
+                if let Some(name) = name {
+                    match running {
+                        Some(e) => {
+                            let mut tags = e.tags.clone();
+                            if !tags.iter().any(|t| t.eq_ignore_ascii_case(&name)) { tags.push(name); }
+                            app.store.update_running(|x| x.tags = tags.clone());
+                            let current = app.store.db.task(&e.task_id).map(|t| t.display()).unwrap_or_else(|| e.description.clone());
+                            app.today.run_desc = if rest.trim() == current.trim() { None } else { Some((e.id.clone(), rest.clone())) };
+                        }
+                        None => {
+                            if !app.today.draft.tags.iter().any(|t| t.eq_ignore_ascii_case(&name)) { app.today.draft.tags.push(name); }
+                            app.today.draft.desc = rest.clone();
+                        }
+                    }
+                }
+                app.today.focus_desc = true;
+                r.request_focus();
+            }
             (Suggest::LookUp(n), _) => {
                 super::assigned::look_up(app, &n);
                 r.request_focus();
@@ -772,6 +901,8 @@ pub fn suggest_pick(db: &Db, remote: Option<&RemoteSuggest>, ui: &mut egui::Ui, 
     if enter {
         match hl.and_then(|h| list.get(h)) {
             Some(s) => choice = Some(s.clone()),
+            // a #word being typed: Enter takes the first tag offered, never starts
+            None if matches!(list.first(), Some(Suggest::Tag(..) | Suggest::NewTag(..))) => choice = list.first().cloned(),
             None => enter_start = can_start,
         }
     }
@@ -783,11 +914,11 @@ pub fn suggest_pick(db: &Db, remote: Option<&RemoteSuggest>, ui: &mut egui::Ui, 
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let mut header: Option<u8> = None;
                 for (i, s) in list.iter().enumerate() {
-                    let group = match s { Suggest::Task(..) => 0u8, Suggest::Remote(..) | Suggest::LookUp(..) | Suggest::Refresh => 1, Suggest::Project(..) => 2 };
+                    let group = match s { Suggest::Task(..) => 0u8, Suggest::Remote(..) | Suggest::LookUp(..) | Suggest::Refresh => 1, Suggest::Project(..) => 2, Suggest::Tag(..) | Suggest::NewTag(..) => 3 };
                     if header != Some(group) {
                         if header.is_some() { ui.add_space(4.0); }
                         let (hr, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::hover());
-                        let name = match group { 0 => tr("Tasks"), 1 => tr("From Azure DevOps · not in DevTrack yet"), _ => tr("Projects") };
+                        let name = match group { 0 => tr("Tasks"), 1 => tr("From Azure DevOps · not in DevTrack yet"), 2 => tr("Projects"), _ => tr("Tags") };
                         ui.painter().text(hr.left_center() + egui::vec2(10.0, 0.0), egui::Align2::LEFT_CENTER, name, sans(12.0), c.text2);
                         header = Some(group);
                     }
@@ -827,6 +958,8 @@ pub fn suggest_pick(db: &Db, remote: Option<&RemoteSuggest>, ui: &mut egui::Ui, 
                             // only the offer acts: a lookup under way or done says where it stands
                             p && !matches!(state, Some(Lookup::Searching) | Some(Lookup::NotFound))
                         }
+                        Suggest::Tag(n) => pick_row(ui, hl == Some(i), None, &format!("#{}", n), "", false),
+                        Suggest::NewTag(n) => pick_row(ui, hl == Some(i), None, &trf_m!("+ Create tag “{}”", truncate(n, 28)), "", false),
                         Suggest::Refresh => {
                             // how current the list is, said in words (and amber), with the way to fix it
                             let st = remote.and_then(|r| r.status.clone()).unwrap_or_default();
@@ -850,6 +983,7 @@ pub fn suggest_pick(db: &Db, remote: Option<&RemoteSuggest>, ui: &mut egui::Ui, 
             Suggest::Remote(n) => remote.and_then(|r| r.items.iter().find(|x| &x.id == n)).map(|i| i.display()).unwrap_or_default(),
             // a lookup keeps the list open: its result shows in it
             Suggest::LookUp(_) | Suggest::Refresh => String::from("\u{0}"),
+            Suggest::Tag(_) | Suggest::NewTag(_) => tag_token(&text).map(|(rest, _)| rest).unwrap_or_default(),
             Suggest::Project(_) => text.clone(),
         };
         ui.data_mut(|d| { d.remove::<egui::Rect>(pop); d.insert_temp(hl_id, None::<usize>); d.insert_temp(dismissed_id, shown); });
@@ -1122,6 +1256,12 @@ fn ledger_summary(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], perio
         None => 0.0,
     };
     let counts_w = if done == 0 && !app.today.only_incomplete { 0.0 } else { total.size().x + 8.0 + rest.size().x };
+    // the tag filter sits on the right, with what it narrows: not on the grid (typed totals)
+    let has_tags = !app.store.db.live_tags().is_empty();
+    let filter_on = app.today.tag_filter.is_some();
+    let show_filter = !app.today.timesheet && (has_tags || filter_on);
+    let filter_w = if show_filter { TAG_FILTER_W + if filter_on { CTRL_H + 4.0 } else { 0.0 } + GROUP_GAP } else { 0.0 };
+    let views_w = views_w + filter_w;
     let views_beside = counts_w + state_w + GROUP_GAP + views_w <= w;
     let state_beside = counts_w + state_w <= w;
     let baseline = |g: &egui::Galley| g.rows.first().and_then(|r| r.glyphs.first()).map(|gl| gl.pos.y).unwrap_or(g.size().y);
@@ -1140,17 +1280,20 @@ fn ledger_summary(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], perio
             ui.add_space(GROUP_GAP - ui.spacing().item_spacing.x);
             clicked = state_line(ui, text, *color, *action);
         }
-        if views_beside && app.today.views_in_summary {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| summary_views(app, ui));
+        if views_beside && (app.today.views_in_summary || show_filter) {
+            // as high as the row: the tools never push the list down
+            let room = egui::vec2(ui.available_width(), CTRL_H);
+            ui.allocate_ui_with_layout(room, egui::Layout::right_to_left(egui::Align::Center), |ui| summary_tools(app, ui, show_filter));
         }
     });
     if let (Some((text, color, action)), false) = (&state, state_beside) {
         ui.add_space(ROW_GAP);
         clicked = state_line(ui, text, *color, *action);
     }
-    if !views_beside && app.today.views_in_summary {
+    if !views_beside && (app.today.views_in_summary || show_filter) {
         ui.add_space(ROW_GAP);
-        ui.horizontal(|ui| summary_views(app, ui));
+        let room = egui::vec2(ui.available_width(), CTRL_H);
+        ui.allocate_ui_with_layout(room, egui::Layout::right_to_left(egui::Align::Center), |ui| summary_tools(app, ui, show_filter));
     }
     if app.today.timeline && period.kind == PeriodKind::Month {
         ui.add_space(ROW_GAP);
@@ -1158,6 +1301,10 @@ fn ledger_summary(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], perio
     }
     if clicked {
         app.today.only_incomplete = !app.today.only_incomplete;
+        // the sessions to complete may lie outside the tag filter: showing them lifts it
+        if app.today.only_incomplete {
+            app.today.tag_filter = None;
+        }
     }
 }
 
@@ -1169,6 +1316,165 @@ fn state_line(ui: &mut egui::Ui, text: &str, color: Color32, action: Option<(&st
         None => {
             ui.label(RichText::new(tr(text)).font(sans(14.0)).color(color));
             false
+        }
+    }
+}
+
+const TAG_FILTER_W: f32 = 168.0;
+
+/// One step of a group's branch: the line down from `top`, across at `y` to `end`. With `more`
+/// (where the next row starts) it goes on down; without, it is the last and turns with a
+/// rounded corner. Shared by Today and the compact window, so both draw the same tree.
+pub(super) fn branch(painter: &egui::Painter, x: f32, top: f32, y: f32, end: f32, more: Option<f32>, st: Stroke) {
+    const R: f32 = 6.0;
+    match more {
+        Some(bottom) => {
+            painter.line_segment([egui::pos2(x, top), egui::pos2(x, bottom)], st);
+            painter.line_segment([egui::pos2(x, y), egui::pos2(end, y)], st);
+        }
+        None => {
+            painter.line_segment([egui::pos2(x, top), egui::pos2(x, y - R)], st);
+            let pts: Vec<egui::Pos2> = (0..=8).map(|i| {
+                let t = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+                egui::pos2(x + R - R * t.cos(), y - R + R * t.sin())
+            }).collect();
+            painter.add(egui::Shape::line(pts, st));
+            painter.line_segment([egui::pos2(x + R, y), egui::pos2(end, y)], st);
+        }
+    }
+}
+
+/// What tells a session apart under its group: its note, without the task's name the group
+/// already shows ("Migration: duplicates" under "Migration" reads "Duplicates"). None when the
+/// note says nothing more than the task.
+pub(super) fn nested_note(db: &Db, e: &TimeEntry) -> Option<String> {
+    let note = e.description.trim();
+    let task = db.task(&e.task_id).map(|t| t.title.trim().to_string()).unwrap_or_default();
+    if note.is_empty() || note.eq_ignore_ascii_case(&task) || note == super::session_title(db, e) {
+        return None;
+    }
+    let lower = note.to_lowercase();
+    let rest = if !task.is_empty() && lower.starts_with(&task.to_lowercase()) {
+        note[task.len()..].trim_start_matches([':', '-', '–', ',', ' ']).trim()
+    } else {
+        note
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let mut ch = rest.chars();
+    Some(ch.next().map(|f| f.to_uppercase().collect::<String>() + ch.as_str()).unwrap_or_default())
+}
+
+/// How far a session under an open group sits in from the group's own row.
+const NEST_INDENT: f32 = 40.0;
+
+/// In place of the list's header while sessions are ticked: a box for all of them, how many
+/// are ticked, Add tag and Remove tag (each a menu that acts at once), and × to let them go.
+fn selection_bar(app: &mut App, ui: &mut egui::Ui, hr: egui::Rect, ids: &std::collections::BTreeSet<Id>) {
+    let c = p(ui);
+    let n = app.today.selected.len();
+    let all = n == ids.len();
+    // the box sits where the rows have theirs
+    let bx = egui::Rect::from_center_size(egui::pos2(hr.left() + 19.5, hr.center().y), egui::vec2(16.0, 16.0));
+    let box_resp = ui.interact(bx.expand(6.0), ui.id().with("select-all"), Sense::click())
+        .on_hover_text(tr(if all { "Clear selection" } else { "Select all sessions in the list" }));
+    ui.painter().rect_filled(bx, 3.0, c.amber);
+    if all {
+        draw_glyph(ui.painter(), bx.center(), Glyph::Check, c.canvas);
+    } else {
+        ui.painter().hline(bx.left() + 4.0..=bx.right() - 4.0, bx.center().y, Stroke::new(1.8, c.canvas));
+    }
+    if box_resp.clicked() {
+        app.today.selected = if all { Default::default() } else { ids.clone() };
+    }
+    // the tags on the ticked sessions, with how many carry each: what can be taken off
+    let ticked: Vec<TimeEntry> = app.today.selected.iter().filter_map(|id| app.store.db.entries.get(id).cloned()).collect();
+    let on: Vec<(String, Option<usize>)> = super::activities::tag_counts(&app.store.db, &ticked).into_iter().map(|(t, k)| (t, Some(k))).collect();
+    let mut every: Vec<(String, Option<usize>)> = app.store.db.live_tags().into_iter().map(|t| (t.name.clone(), None)).collect();
+    every.sort_by_key(|(t, _)| t.to_lowercase());
+    let (mut add, mut remove, mut clear) = (None, None, false);
+    let inner = egui::Rect::from_min_max(egui::pos2(hr.left() + 33.0, hr.top()), egui::pos2(hr.right() - 8.0, hr.bottom()));
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+        ui.spacing_mut().item_spacing.x = GROUP_GAP;
+        ui.label(RichText::new(plural(n as i64, "{} session selected", "{} sessions selected")).font(medium(13.0)).color(c.text));
+        let a = link_btn(ui, "Add tag");
+        app.geometry.rows.push(("selection · add tag".into(), a.rect));
+        add = tag_menu(ui, ui.id().with("bulk-add"), &a, &every, true);
+        if !on.is_empty() {
+            let r = link_btn(ui, "Remove tag");
+            app.geometry.rows.push(("selection · remove tag".into(), r.rect));
+            remove = tag_menu(ui, ui.id().with("bulk-remove"), &r, &on, false);
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            clear = icon_ghost(ui, Glyph::Close, "Clear selection").clicked();
+        });
+    });
+    if clear {
+        app.today.selected.clear();
+    }
+    if add.is_some() || remove.is_some() {
+        let list: Vec<Id> = app.today.selected.iter().cloned().collect();
+        let (changed, locked) = app.store.tag_entries(&list, add.as_deref(), remove.as_deref());
+        let name = add.as_ref().or(remove.as_ref()).map(|t| app.store.db.tag_named(t).map(|x| x.name.clone()).unwrap_or(t.clone())).unwrap_or_default();
+        let mut msg = match (&add, changed) {
+            (_, 0) => tr("No session changed: they already were as asked"),
+            (Some(_), 1) => trf("#{} added to 1 session", &[&name]),
+            (Some(_), k) => trf("#{} added to {} sessions", &[&name, &k]),
+            (None, 1) => trf("#{} taken off 1 session", &[&name]),
+            (None, k) => trf("#{} taken off {} sessions", &[&name, &k]),
+        };
+        if locked > 0 {
+            msg = format!("{} · {}", msg, plural(locked as i64, "1 in a locked period left as it was", "{} in a locked period left as they were"));
+        }
+        if changed > 0 { app.notify_undo(msg); } else { app.notify(msg); }
+    }
+}
+
+/// The #tag under the pointer in a session's grey line, underlined, or None. `before` is the
+/// text ahead of the first tag; tags cut off by the line's end do not count.
+fn hovered_tag(ui: &egui::Ui, label: &egui::Response, before: &str, tags: &[String], color: Color32) -> Option<String> {
+    let pos = ui.ctx().pointer_hover_pos()?;
+    // the text is 12 px: the target reaches a little above, below and beside each tag
+    if tags.is_empty() || !label.rect.expand2(egui::vec2(0.0, 6.0)).contains(pos) {
+        return None;
+    }
+    let width = |t: &str| ui.painter().layout_no_wrap(t.to_string(), sans(12.0), color).size().x;
+    let mut text = before.to_string();
+    for (i, t) in tags.iter().enumerate() {
+        if i > 0 { text.push(' '); }
+        let x0 = label.rect.left() + width(&text);
+        text.push_str(t);
+        let x1 = label.rect.left() + width(&text);
+        if x1 > label.rect.right() {
+            return None;
+        }
+        // half the space between two tags on each side, so neighbours never overlap
+        let pad = width(" ") / 2.0;
+        if pos.x >= x0 - pad && pos.x <= x1 + pad {
+            let y = label.rect.center().y + 7.0;
+            ui.painter().hline(x0..=x1, y, Stroke::new(1.0, color));
+            return Some(t.clone());
+        }
+    }
+    None
+}
+
+/// The right end of the summary row, from the right: the views (when the period bar has no room
+/// for them), then the tag filter with its clear button while it is on.
+fn summary_tools(app: &mut App, ui: &mut egui::Ui, show_filter: bool) {
+    if app.today.views_in_summary {
+        summary_views(app, ui);
+        ui.add_space(GROUP_GAP - ui.spacing().item_spacing.x);
+    }
+    if show_filter {
+        if app.today.tag_filter.is_some() && icon_button(ui, Glyph::Close, "Show all sessions").clicked() {
+            app.today.tag_filter = None;
+        }
+        let mut f = app.today.tag_filter.clone();
+        let r = ui.scope(|ui| tag_filter(ui, "today-tag-filter", &app.store.db, &mut f, TAG_FILTER_W)).inner;
+        if r {
+            app.today.tag_filter = f;
         }
     }
 }
@@ -1314,48 +1620,113 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
     // header, 36 high
     let (hr, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), Sense::hover());
     ui.painter().rect_filled(hr, TABLE_TOP, c.nav);
-    ui.painter().text(egui::pos2(hr.left() + 14.0, hr.center().y), egui::Align2::LEFT_CENTER, tr(if narrow { "Activity" } else { "Activity / project" }), sans(12.0), c.text2);
-    if time_w > 0.0 {
-        ui.painter().text(egui::pos2(hr.left() + x_time, hr.center().y), egui::Align2::LEFT_CENTER, tr("Time"), sans(12.0), c.text2);
+    // ticked sessions: only those still in the list count; Esc lets them all go
+    let ids: std::collections::BTreeSet<Id> = entries.iter().filter(|e| !e.is_running()).map(|e| e.id.clone()).collect();
+    app.today.selected.retain(|id| ids.contains(id));
+    if !app.today.selected.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !ui.memory(|m| m.any_popup_open()) {
+        app.today.selected.clear();
     }
-    ui.painter().text(egui::pos2(hr.left() + x_time + time_span, hr.center().y), egui::Align2::LEFT_CENTER, tr("Duration"), sans(12.0), c.text2);
+    if app.today.selected.is_empty() {
+        ui.painter().text(egui::pos2(hr.left() + 14.0, hr.center().y), egui::Align2::LEFT_CENTER, tr(if narrow { "Activity" } else { "Activity / project" }), sans(12.0), c.text2);
+        if time_w > 0.0 {
+            ui.painter().text(egui::pos2(hr.left() + x_time, hr.center().y), egui::Align2::LEFT_CENTER, tr("Time"), sans(12.0), c.text2);
+        }
+        ui.painter().text(egui::pos2(hr.left() + x_time + time_span, hr.center().y), egui::Align2::LEFT_CENTER, tr("Duration"), sans(12.0), c.text2);
+    } else {
+        // the table's header becomes the bar for what was ticked: nothing moves
+        selection_bar(app, ui, hr, &ids);
+    }
     let mut action: Option<(u8, TimeEntry)> = None;
     let mut copied: Option<String> = None;
     // grouped by task, every day gets its band: it carries the copy of the day's totals
     let by_task = app.store.local.list_by_task;
     let multi_day = by_day.len() > 1 || by_task;
-    let mut day_copy: Option<String> = None;
     // rows are exactly 64 high: no extra spacing between a row and its divider
     ui.spacing_mut().item_spacing.y = 0.0;
     // one session's row (also a group's sessions when it is open)
-    let draw_session = |app: &mut App, ui: &mut egui::Ui, e: &TimeEntry, a: &i64, b: &i64, action: &mut Option<(u8, TimeEntry)>, copied: &mut Option<String>| {
+    // `nest`: the session hangs from an open group — (the tags said once on the group, whether
+    // it is the group's last). It then says only what is its own: its note, the tags the others
+    // lack, its times; indented under the group's title, joined to it by a line.
+    let draw_session = |app: &mut App, ui: &mut egui::Ui, e: &TimeEntry, a: &i64, b: &i64, action: &mut Option<(u8, TimeEntry)>, copied: &mut Option<String>, nest: Option<(&[String], bool)>| {
+        let nested = nest.is_some();
+        let shared: &[String] = nest.map(|n| n.0).unwrap_or(&[]);
+        let mw = if nested { main_w - NEST_INDENT } else { main_w };
+        let own_line = nested && missing_text(e).is_empty() && session_observations(&e.id, &fl).is_empty() && e.tags.iter().all(|t| shared.iter().any(|x| x.eq_ignore_ascii_case(t)));
         let mut action_rect = egui::Rect::NOTHING;
         let mut buttons_left = 0.0_f32;
+        let mut tag_hit: Option<String> = None;
+        let mut box_hit = false;
+        let selecting = !app.today.selected.is_empty();
+        let ticked = app.today.selected.contains(&e.id);
+        let over_row = ui.ctx().read_response(egui::Id::new(("row", &e.id, *a))).is_some_and(|x| x.hovered());
+        let show_box = selecting || over_row || ticked;
+        let mut menu_tick = false;
         let row = ui.horizontal(|ui| {
             ui.set_min_height(64.0);
-            ui.add_space(14.0);
-            col(ui, main_w, 60.0, |ui| {
+            ui.add_space(if nested { 14.0 + NEST_INDENT } else { 14.0 });
+            col(ui, mw, 60.0, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                ui.add_space(12.0);
+                // a nested session with nothing of its own to add sits on the row's middle
+                ui.add_space(if own_line { 21.0 } else { 12.0 });
                 ui.horizontal(|ui| {
-                    match app.store.db.project(&e.project_id).map(|p| hex(&p.color)) {
-                        Some(col_) => dot(ui, col_, 3.5),
-                        None => {
-                            let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 9.0), Sense::hover());
-                            ui.painter().circle_stroke(r.center(), 3.5, Stroke::new(1.2, c.amber));
+                    // the project's dot; while sessions are being picked (or under the pointer)
+                    // a check box in its place
+                    // nested: no dot of its own; its box sits on the group's line, in the column
+                    // where every row has its box
+                    let r = if nested {
+                        let at = ui.cursor().min;
+                        egui::Rect::from_center_size(egui::pos2(at.x - NEST_INDENT + 5.5, at.y + 9.0), egui::vec2(11.0, 9.0))
+                    } else {
+                        ui.allocate_exact_size(egui::vec2(11.0, 9.0), Sense::hover()).0
+                    };
+                    let painter = ui.painter().with_clip_rect(ui.ctx().screen_rect());
+                    if show_box {
+                        let bx = egui::Rect::from_center_size(r.center(), egui::vec2(16.0, 16.0));
+                        let hot = egui::Rect::from_center_size(r.center(), egui::vec2(28.0, 28.0));
+                        box_hit = ui.ctx().pointer_hover_pos().is_some_and(|p| hot.contains(p));
+                        if ticked {
+                            painter.rect_filled(bx, 3.0, c.amber);
+                            draw_glyph(&painter, bx.center(), Glyph::Check, c.canvas);
+                        } else {
+                            painter.rect_filled(bx, 3.0, c.canvas);
+                            painter.rect_stroke(bx, 3.0, Stroke::new(1.2, if box_hit { c.text } else { c.text2 }), egui::StrokeKind::Inside);
+                        }
+                    } else if !nested {
+                        // nested: the group's dot stands for it
+                        match app.store.db.project(&e.project_id).map(|p| hex(&p.color)) {
+                            Some(col_) => { ui.painter().circle_filled(r.center(), 3.5, col_); }
+                            None => { ui.painter().circle_stroke(r.center(), 3.5, Stroke::new(1.2, c.amber)); }
                         }
                     }
-                    let title_txt = super::session_title(&app.store.db, e);
-                    ui.add(egui::Label::new(RichText::new(title_txt).font(medium(14.0))).truncate());
+                    if nested {
+                        // the group names the task; a session under it is told apart by its note
+                        let (t, col_) = match nested_note(&app.store.db, e) {
+                            Some(n) => (n, c.text),
+                            None => (tr("No note"), c.text2),
+                        };
+                        ui.add(egui::Label::new(RichText::new(t).font(sans(14.0)).color(col_)).truncate());
+                    } else {
+                        let title_txt = super::session_title(&app.store.db, e);
+                        ui.add(egui::Label::new(RichText::new(title_txt).font(medium(14.0))).truncate());
+                    }
                 });
                 let observations = session_observations(&e.id, &fl);
                 let miss = missing_text(e);
+                // the tags close the line; each one filters the list to its sessions
+                let tag_names: Vec<String> = if miss.is_empty() {
+                    e.tags.iter().filter(|t| !shared.iter().any(|x| x.eq_ignore_ascii_case(t))).map(|t| format!("#{}", t)).collect()
+                } else { vec![] };
+                let mut before_tags = String::new();
                 let context = if !miss.is_empty() {
                     tr(miss)
                 } else {
-                    let mut parts = vec![super::session_context(&app.store.db, e)];
+                    // nested: project, client and note are on the group or in the title
+                    let mut parts = if nested { vec![] } else { vec![super::session_context(&app.store.db, e)] };
                     parts.retain(|p| !p.is_empty());
-                    if !e.tags.is_empty() { parts.push(e.tags.iter().map(|t| format!("#{}", t)).collect::<Vec<_>>().join(" ")); }
+                    if !tag_names.is_empty() {
+                        before_tags = if parts.is_empty() { String::new() } else { format!("{} · ", parts.join(" · ")) };
+                        parts.push(tag_names.join(" "));
+                    }
                     parts.join(" · ")
                 };
                 let summary = if observations.is_empty() { context.clone() } else {
@@ -1365,12 +1736,31 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
                 let full = std::iter::once(context).chain(observations.iter().cloned()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
                 // One bounded metadata line: arbitrary warning counts never grow this cell.
                 let rect = ui.available_rect_before_wrap();
-                ui.set_clip_rect(ui.clip_rect().intersect(egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() - 64.0), egui::pos2(rect.left() + main_w, rect.bottom()))));
+                ui.set_clip_rect(ui.clip_rect().intersect(egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() - 64.0), egui::pos2(rect.left() + mw, rect.bottom()))));
                 // The whole row opens the editor (with the checks), so no separate Review link.
-                ui.allocate_ui_with_layout(egui::vec2(main_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_width(main_w);
-                    ui.add(egui::Label::new(RichText::new(summary).size(12.0).color(if miss.is_empty() { c.text2 } else { c.amber })).truncate()).on_hover_text(full);
-                });
+                if !own_line { ui.allocate_ui_with_layout(egui::vec2(mw, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_width(mw);
+                    // the #tags, which filter on a click, a step brighter than the words around them:
+                    // what can be clicked is told apart without a colour
+                    let line: egui::WidgetText = if tag_names.is_empty() || !miss.is_empty() {
+                        RichText::new(summary).size(12.0).color(if miss.is_empty() { c.text2 } else { c.amber }).into()
+                    } else {
+                        let tags_txt = tag_names.join(" ");
+                        let rest = summary.get(before_tags.len() + tags_txt.len()..).unwrap_or("").to_string();
+                        let fmt = |col| egui::TextFormat { font_id: sans(12.0), color: col, ..Default::default() };
+                        let mut j = egui::text::LayoutJob::default();
+                        j.append(&before_tags, 0.0, fmt(c.text2));
+                        j.append(&tags_txt, 0.0, fmt(c.text2.lerp_to_gamma(c.text, 0.45)));
+                        j.append(&rest, 0.0, fmt(c.text2));
+                        egui::WidgetText::LayoutJob(j)
+                    };
+                    let lr = ui.add(egui::Label::new(line).truncate());
+                    tag_hit = hovered_tag(ui, &lr, &before_tags, &tag_names, c.text2);
+                    match &tag_hit {
+                        Some(t) => { lr.on_hover_text(trf("Show only the sessions with {}", &[t])); }
+                        None => { lr.on_hover_text(full); }
+                    }
+                }); }
             });
             let (from, to) = piece_times(e, *a, *b, h24);
             let note = if *a > e.start { "from the day before" } else if Some(*b) != e.stop { "continues next day" } else { "" };
@@ -1443,6 +1833,10 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
                 if menu_row(ui, "Edit…", false, false).clicked() {
                     *action = Some((1, e.clone()));
                 }
+                // the way into ticking several, also from the keyboard (Space ticks the row)
+                if menu_row(ui, if ticked { "Deselect" } else { "Select" }, false, false).on_hover_text(tr("Tick it, to tag several sessions at once (Space on the row)")).clicked() {
+                    menu_tick = true;
+                }
                 // the task's own page: source data (Azure DevOps) and every session on it
                 if app.store.db.task(&e.task_id).is_some() && menu_row(ui, "Open task", false, false).clicked() {
                     *action = Some((3, e.clone()));
@@ -1463,6 +1857,22 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
                 }
             });
         });
+        // the branch to the group: down from the group's dot, then across to this session; the
+        // last one ends the line
+        if let Some((_, last)) = nest {
+            let r = row.response.rect;
+            let x = r.left() + 19.5;
+            let y = r.top() + if own_line { 30.0 } else { 21.0 };
+            let end = r.left() + 14.0 + NEST_INDENT - 6.0;
+            let st = Stroke::new(1.5, c.border);
+            if show_box {
+                // the box takes the joint: the line stops short of it on both sides
+                ui.painter().line_segment([egui::pos2(x, r.top()), egui::pos2(x, y - 11.0)], st);
+                if !last { ui.painter().line_segment([egui::pos2(x, y + 11.0), egui::pos2(x, r.bottom())], st); }
+            } else {
+                branch(ui.painter(), x, r.top(), y, end, if last { None } else { Some(r.bottom()) }, st);
+            }
+        }
         if app.today.highlight.as_deref() == Some(e.id.as_str()) {
             let r = row.response.rect.expand2(egui::vec2(0.0, 0.0));
             ui.painter().rect_filled(egui::Rect::from_min_max(r.min, egui::pos2(r.left() + 3.0, r.max.y)), 1.5, c.focus);
@@ -1474,10 +1884,28 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        if resp.clicked() {
-            *action = Some((1, e.clone()));
+        // a click on a #tag filters by it; anywhere else on the row opens the editor
+        // while picking, the whole row ticks; the box, ⌘/Ctrl-click, Space on the focused row and
+        // the menu's Select tick at any time (Enter still opens it)
+        let space = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space));
+        let toggle = menu_tick || space || box_hit || (resp.clicked() && (selecting || ui.input(|i| i.modifiers.command)));
+        if resp.clicked() || space || menu_tick {
+            if toggle {
+                if !app.today.selected.remove(&e.id) {
+                    app.today.selected.insert(e.id.clone());
+                }
+            } else {
+                match &tag_hit {
+                    Some(t) => app.today.tag_filter = Some(TagFilter::Tag(t.trim_start_matches('#').to_string())),
+                    None => *action = Some((1, e.clone())),
+                }
+            }
         }
-        divider(ui);
+        // inside a group the divider steps in to the nested edge, until the last session
+        match nest {
+            Some((_, last)) => nest_divider(ui, !last),
+            None => divider(ui),
+        }
     };
     for (date, mut list) in by_day.into_iter().rev() {
         list.sort_by_key(|x| x.1);
@@ -1493,16 +1921,7 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
             ui.painter().text(egui::pos2(name.right() + ROW_GAP, dr.center().y), egui::Align2::LEFT_CENTER, super::i18n::short_date(date), mono_font(12.0), c.text2);
             let total: i64 = list.iter().map(|x| x.2 - x.1).sum();
             // under its column; a narrow list has no room there beside the date, so it goes to the right edge
-            let copy_room = if by_task { CTRL_H + 4.0 } else { 0.0 };
-            let (tx, ta) = if narrow { (dr.right() - 14.0 - copy_room, egui::Align2::RIGHT_CENTER) } else { (dr.left() + x_time + time_span, egui::Align2::LEFT_CENTER) };
-            if by_task {
-                let br = egui::Rect::from_min_size(egui::pos2(dr.right() - 4.0 - CTRL_H, dr.top()), egui::vec2(CTRL_H, CTRL_H));
-                let mut cu = ui.new_child(egui::UiBuilder::new().max_rect(br));
-                if icon_ghost(&mut cu, Glyph::Copy, "Copy the day's totals per task").clicked() {
-                    let groups = super::by_task::group(&list);
-                    day_copy = Some(super::by_task::day_text(&app.store.db, &groups, &profiles, |e| super::session_title(&app.store.db, e)));
-                }
-            }
+            let (tx, ta) = if narrow { (dr.right() - 14.0, egui::Align2::RIGHT_CENTER) } else { (dr.left() + x_time + time_span, egui::Align2::LEFT_CENTER) };
             ui.painter().text(egui::pos2(tx, dr.center().y), ta, super::shown_duration(&app.store.db, total), mono_medium(13.0), c.text);
             divider(ui);
         }
@@ -1510,13 +1929,13 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
             for g in super::by_task::group(&list) {
                 if g.pieces.len() == 1 {
                     let (e, a, b) = &g.pieces[0];
-                    draw_session(app, ui, e, a, b, &mut action, &mut copied);
+                    draw_session(app, ui, e, a, b, &mut action, &mut copied, None);
                     continue;
                 }
                 let gid = super::by_task::group_id(date, &g);
                 let open = app.today.open_groups.contains(&gid);
                 let lead = g.latest().clone();
-                let (toggle, resume, conv_copy) = group_row(app, ui, &g, open, &profiles, GroupCols { main_w, time_w, dur_w, has_conv, play_btn }, h24);
+                let (toggle, resume, conv_copy) = group_row(app, ui, &g, open, &profiles, GroupCols { main_w, time_w, dur_w, has_conv, play_btn });
                 if let Some(v) = conv_copy {
                     copied = Some(v);
                 }
@@ -1527,19 +1946,18 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
                     if open { app.today.open_groups.remove(&gid); } else { app.today.open_groups.insert(gid.clone()); }
                 }
                 if open {
-                    for (e, a, b) in &g.pieces {
-                        let top = ui.cursor().top();
-                        draw_session(app, ui, e, a, b, &mut action, &mut copied);
-                        // the group's sessions hang from it: a line down their left edge
-                        let x = ui.max_rect().left() + 5.0;
-                        ui.painter().line_segment([egui::pos2(x, top + 10.0), egui::pos2(x, ui.cursor().top() - 10.0)], Stroke::new(2.0, c.border));
+                    // the tags on every session of the group are on its row already
+                    let shared = group_shared_tags(&app.store.db, &g);
+                    let n = g.pieces.len();
+                    for (i, (e, a, b)) in g.pieces.iter().enumerate() {
+                        draw_session(app, ui, e, a, b, &mut action, &mut copied, Some((&shared, i + 1 == n)));
                     }
                 }
             }
             continue;
         }
         for (e, a, b) in &list {
-            draw_session(app, ui, e, a, b, &mut action, &mut copied);
+            draw_session(app, ui, e, a, b, &mut action, &mut copied, None);
         }
     }
     if !entries.is_empty() {
@@ -1548,10 +1966,6 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
     if let Some(v) = copied {
         ui.ctx().copy_text(v.clone());
         app.notify(trf_m!("Copied: {}", v));
-    }
-    if let Some(t) = day_copy {
-        ui.ctx().copy_text(t);
-        app.notify(tr("The day's totals per task are copied: paste them into a spreadsheet"));
     }
     if let Some((kind, e)) = action {
         // a locked session can be continued, opened or made a favorite, never changed
@@ -1620,7 +2034,22 @@ struct GroupCols {
 /// One task's line on a day: its sessions' total, from the first start to the last end, the
 /// conversions of the total and Continue; the chevron (or a click on the line) shows its
 /// sessions under it. Returns (toggle, continue, a conversion value to copy).
-fn group_row(app: &mut App, ui: &mut egui::Ui, g: &super::by_task::TaskGroup, open: bool, profiles: &[TimesheetProfile], cols: GroupCols, h24: bool) -> (bool, bool, Option<String>) {
+/// The tags on a group's sessions with how many carry each, most used first.
+pub(super) fn group_tag_counts(db: &Db, g: &super::by_task::TaskGroup) -> Vec<(String, usize)> {
+    let mut es: Vec<TimeEntry> = vec![];
+    for (e, _, _) in &g.pieces {
+        if !es.iter().any(|x| x.id == e.id) { es.push(e.clone()); }
+    }
+    super::activities::tag_counts(db, &es)
+}
+
+/// The tags every session of a group carries: said on the group's row, not on each session.
+fn group_shared_tags(db: &Db, g: &super::by_task::TaskGroup) -> Vec<String> {
+    let n = g.pieces.iter().map(|p| &p.0.id).collect::<std::collections::BTreeSet<_>>().len();
+    group_tag_counts(db, g).into_iter().filter(|(_, k)| *k == n).map(|(t, _)| t).collect()
+}
+
+fn group_row(app: &mut App, ui: &mut egui::Ui, g: &super::by_task::TaskGroup, open: bool, profiles: &[TimesheetProfile], cols: GroupCols) -> (bool, bool, Option<String>) {
     let c = p(ui);
     let e = g.latest().clone();
     let mut toggle = false;
@@ -1645,20 +2074,28 @@ fn group_row(app: &mut App, ui: &mut egui::Ui, g: &super::by_task::TaskGroup, op
                 let client = app.store.db.client_name(p);
                 if client.is_empty() { p.name.clone() } else { format!("{} · {}", p.name, client) }
             }).unwrap_or_default();
-            let line = if context.is_empty() { plural(n, "{} session", "{} sessions") } else { format!("{} · {}", plural(n, "{} session", "{} sessions"), context) };
+            // how many sessions is said in the time column
+            let mut line = context;
+            // the group's tags once, most used first
+            let counts = group_tag_counts(&app.store.db, g);
+            if !counts.is_empty() {
+                let t = super::activities::tag_summary(&counts);
+                line = if line.is_empty() { t } else { format!("{} · {}", line, t) };
+            }
             ui.allocate_ui_with_layout(egui::vec2(cols.main_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.set_width(cols.main_w);
-                ui.add(egui::Label::new(mixed_job(&line, 12.0, c.text2, sans(12.0), mono_font(12.0))).truncate());
+                // the tags behind "+N", on the pointer, in place of egui's own tip for a cut line
+                let hover = super::activities::all_tags_hover(&line, &counts);
+                cut_line(ui, mixed_job(&line, 12.0, c.text2, sans(12.0), mono_font(12.0)), hover);
             });
         });
-        let (from, to) = (clock_text(g.first, h24), clock_text(g.last, h24));
         if cols.time_w > 0.0 {
             col(ui, cols.time_w, 60.0, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                ui.add_space(12.0);
-                ui.label(range_job(&from, &to, 13.0, c.text2));
-                // first start to last end is not one stretch of work
-                mixed(ui, &plural(n, "{} interval", "{} intervals"), 12.0, Some(c.text2));
+                // no times: first start to last end would read as one stretch of work, and the
+                // sessions, opened, show their own
+                ui.add_space(21.0);
+                mixed(ui, &plural(n, "{} session", "{} sessions"), 13.0, Some(c.text2));
             });
         }
         col(ui, cols.dur_w, 60.0, |ui| {
@@ -1672,7 +2109,7 @@ fn group_row(app: &mut App, ui: &mut egui::Ui, g: &super::by_task::TaskGroup, op
                 }
             });
             if cols.time_w == 0.0 {
-                ui.label(range_job(&from, &to, 12.0, c.text2));
+                mixed(ui, &plural(n, "{} session", "{} sessions"), 12.0, Some(c.text2));
             }
         });
         ui.add_space(4.0);
@@ -1715,8 +2152,28 @@ fn group_row(app: &mut App, ui: &mut egui::Ui, g: &super::by_task::TaskGroup, op
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     toggle |= resp.clicked();
-    divider(ui);
+    if open {
+        // its sessions hang from its dot: the line starts here, and the divider steps in to them
+        let r = row.response.rect;
+        ui.painter().line_segment([egui::pos2(r.left() + 19.5, r.bottom() - 6.0), egui::pos2(r.left() + 19.5, r.bottom())], Stroke::new(1.5, c.border));
+        nest_divider(ui, true);
+    } else {
+        divider(ui);
+    }
     (toggle, resume, copied)
+}
+
+/// A divider under a row of an open group: it starts at the nested sessions' edge, so the group
+/// reads as one block, and the branch line passes through it. `more`: another nested row follows.
+fn nest_divider(ui: &mut egui::Ui, more: bool) {
+    if !more {
+        divider(ui);
+        return;
+    }
+    let c = p(ui);
+    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(r.left() + 14.0 + NEST_INDENT, r.top()), r.max), 0.0, c.line);
+    ui.painter().line_segment([egui::pos2(r.left() + 19.5, r.top()), egui::pos2(r.left() + 19.5, r.bottom())], Stroke::new(1.5, c.border));
 }
 
 /// The message shown when something tries to change a locked session.
@@ -2087,6 +2544,14 @@ fn favorites_row(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn timeline(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Period) {
+    let dim = app.today.tag_filter.clone();
+    timeline_in(app, ui, entries, period, true, dim.as_ref());
+}
+
+/// The calendar: the sessions as blocks on the hours of each day. `header` draws each day's name
+/// and total above its column (the compact window has its own day row instead).
+/// `dim`: the tag filter on Today; sessions it leaves out are drawn faint but still there.
+pub(super) fn timeline_in(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Period, header: bool, dim: Option<&TagFilter>) {
     let now = now_secs();
     let c = p(ui);
     let fmt = app.store.db.settings.duration_format;
@@ -2130,20 +2595,22 @@ fn timeline(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Pe
     }
     // the hours fill the height the window gives the calendar (day header and margins taken out),
     // between 48 and 140 per hour: taller windows show more of each session, shorter ones scroll
-    let room = ui.available_height() - 38.0 - 16.0;
+    let head_h = if header { 38.0 } else { 0.0 };
+    let room = ui.available_height() - head_h - 16.0;
     let hours = (last_h - first_h).max(1) as f32;
     let hour_h = if room.is_finite() && room > 0.0 && room < 10_000.0 { (room / hours).clamp(48.0, 140.0).floor() } else { 48.0 };
     let gutter = 52.0;
-    let mut clicked: Option<TimeEntry> = None;
+    let mut clicked: Option<(TimeEntry, egui::Rect)> = None;
     let mut create_at: Option<(NaiveDate, i64)> = None;
     let mut dragged: Option<(TimeEntry, i64, i64)> = None;
     let mut refused_future = false;
     let total_w = ui.available_width();
     let col_w = ((total_w - gutter - 8.0) / days.len() as f32).max(60.0);
-    let (hr, _) = ui.allocate_exact_size(egui::vec2(gutter + col_w * days.len() as f32, 38.0), Sense::hover());
-    for (i, d) in days.iter().enumerate() {
+    let (hr, _) = ui.allocate_exact_size(egui::vec2(gutter + col_w * days.len() as f32, head_h), Sense::hover());
+    for (i, d) in days.iter().enumerate().filter(|_| header) {
         let x = hr.left() + gutter + i as f32 * col_w + 6.0;
-        let tot: i64 = pieces.iter().filter(|x| x.0 == *d).map(|x| x.3 - x.2).sum();
+        // with a filter, the day's total is the filter's, as the summary above says
+        let tot: i64 = pieces.iter().filter(|x| x.0 == *d && dim.is_none_or(|f| f.matches(&x.1))).map(|x| x.3 - x.2).sum();
         // the day number follows the name at a fixed 6, whatever the name's width
         let name = ui.painter().text(egui::pos2(x, hr.top() + 2.0), egui::Align2::LEFT_TOP, super::i18n::weekday_short(*d), medium(14.0), if *d == today() { c.text } else { c.text2 });
         ui.painter().text(egui::pos2(name.right() + 6.0, hr.top() + 3.0), egui::Align2::LEFT_TOP, d.format("%d").to_string(), mono_font(12.0), c.text2);
@@ -2233,43 +2700,73 @@ fn timeline(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Pe
                         }
                     }
                 }
+                if dim.is_some_and(|f| !f.matches(e)) {
+                    // out of the filter: a veil of the page's colour over the whole block. Square and
+                    // a hair larger: a rounded one left the colour bar's ends uncovered, and its
+                    // corners fall on the page's own colour anyway
+                    painter.rect_filled(r.expand(0.5), 0.0, c.canvas.gamma_multiply(0.7));
+                }
                 let resp = ui.interact(r, egui::Id::new(("tl", &e.id, *d)), Sense::click_and_drag());
                 if resp.clicked() {
-                    clicked = Some(e.clone());
+                    clicked = Some((e.clone(), r));
                 }
-                // Drag the block to move it, its lower edge to change its end: 5-minute steps.
-                // Only a finished session wholly inside this day, outside the locked days.
+                // Drag the block to move it, its upper edge to change its start, its lower edge
+                // to change its end, in the calendar step. Only a finished session wholly inside
+                // this day, outside the locked days.
                 let movable = !e.is_running() && *a == e.start && Some(*b) == e.stop && !report::locked(&app.store.db, e.start);
                 let drag_id = egui::Id::new("tl-drag");
                 if movable {
-                    let near_edge = resp.hover_pos().map(|p| p.y > r.bottom() - 7.0).unwrap_or(false);
-                    if resp.hovered() {
-                        ui.ctx().set_cursor_icon(if near_edge { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::Grab });
+                    // 0 moves, 1 the end, 2 the start; the edges are 8 px bands, never more than a
+                    // third of a short block so it can still be moved
+                    let edge = 8.0f32.min(r.height() / 3.0);
+                    let part_at = |p: egui::Pos2| if p.y > r.bottom() - edge { 1u8 } else if p.y < r.top() + edge { 2 } else { 0 };
+                    if let Some(p) = resp.hover_pos() {
+                        ui.ctx().set_cursor_icon(if part_at(p) == 0 { egui::CursorIcon::Grab } else { egui::CursorIcon::ResizeVertical });
                     }
                     if resp.drag_started() {
-                        ui.data_mut(|x| x.insert_temp(drag_id, (e.id.clone(), near_edge, 0.0f32)));
+                        // where the button went down, not where the pointer is once the drag is
+                        // recognised (a few pixels on, often past an 8 px edge already); the
+                        // distance covered so far counts too
+                        let origin = ui.input(|i| i.pointer.press_origin());
+                        let part = origin.map(part_at).unwrap_or(0);
+                        let so_far = match (origin, ui.input(|i| i.pointer.interact_pos())) {
+                            (Some(o), Some(p)) => p.y - o.y - resp.drag_delta().y,
+                            _ => 0.0,
+                        };
+                        ui.data_mut(|x| x.insert_temp(drag_id, (e.id.clone(), part, so_far)));
                     }
-                    let state = ui.data(|x| x.get_temp::<(Id, bool, f32)>(drag_id)).filter(|st| st.0 == e.id);
-                    if let Some((_, resize, dy)) = state {
+                    let state = ui.data(|x| x.get_temp::<(Id, u8, f32)>(drag_id)).filter(|st| st.0 == e.id);
+                    if let Some((_, part, dy)) = state {
                         let dy = dy + resp.drag_delta().y;
                         let step = app.store.db.settings.calendar_step.max(1) as f32;
                         let mins = ((dy / hour_h * 60.0) / step).round() as i64 * step as i64;
                         let shift = mins as f32 / 60.0 * hour_h;
                         // preview: where it will land, with the new times
-                        let preview = if resize { egui::Rect::from_min_max(r.min, egui::pos2(r.right(), (r.bottom() + shift).max(r.top() + 6.0))) } else { r.translate(egui::vec2(0.0, shift)) };
+                        let preview = match part {
+                            1 => egui::Rect::from_min_max(r.min, egui::pos2(r.right(), (r.bottom() + shift).max(r.top() + 6.0))),
+                            2 => egui::Rect::from_min_max(egui::pos2(r.left(), (r.top() + shift).min(r.bottom() - 6.0)), r.max),
+                            _ => r.translate(egui::vec2(0.0, shift)),
+                        };
                         let fg = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("tl-preview")));
                         fg.rect(preview, 5.0, c.focus.linear_multiply(0.15), Stroke::new(1.5, c.focus), egui::StrokeKind::Inside);
-                        let (ns, ne) = if resize { (e.start, (b + mins * 60).max(e.start + 300)) } else { (e.start + mins * 60, b + mins * 60) };
+                        // a session keeps at least five minutes
+                        let (ns, ne) = match part {
+                            1 => (e.start, (b + mins * 60).max(e.start + 300)),
+                            2 => ((a + mins * 60).min(b - 300), *b),
+                            _ => (e.start + mins * 60, b + mins * 60),
+                        };
+                        // whole minutes once moved, as the editor leaves them
+                        let (ns, ne) = (ns - ns.rem_euclid(60), ne - ne.rem_euclid(60));
                         fg.text(preview.left_top() + egui::vec2(9.0, 3.0), egui::Align2::LEFT_TOP, format!("{} → {}", clock_text(ns, true), clock_text(ne, true)), mono_font(12.0), c.text);
                         if resp.drag_stopped() {
-                            ui.data_mut(|x| x.remove::<(Id, bool, f32)>(drag_id));
+                            ui.data_mut(|x| x.remove::<(Id, u8, f32)>(drag_id));
                             if mins != 0 && ne <= now {
                                 dragged = Some((e.clone(), ns, ne));
                             } else if ne > now {
                                 refused_future = true;
                             }
                         } else {
-                            ui.data_mut(|x| x.insert_temp(drag_id, (e.id.clone(), resize, dy)));
+                            ui.data_mut(|x| x.insert_temp(drag_id, (e.id.clone(), part, dy)));
                         }
                     }
                 }
@@ -2306,10 +2803,14 @@ fn timeline(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Pe
         app.today.past = Past { date: d.clone(), end_date: d, start: format!("{:02}:{:02}", mins / 60, mins % 60), end: format!("{:02}:{:02}", end / 60, end % 60), ..Past::default() };
         app.today.past_open = true;
     }
-    if let Some(e) = clicked {
+    if let Some((e, r)) = clicked {
         let ctx = ui.ctx().clone();
         let review = needs_completion(&e);
         open_edit(app, &e, Some(&ctx), review);
+        // the compact window's editor opens by the block, as it does by a row
+        if app.mode == super::WinMode::Compact {
+            app.today.edit_anchor = Some(r);
+        }
     }
 }
 
@@ -2632,12 +3133,9 @@ pub fn edit_modal(app: &mut App, ctx: &egui::Context) {
         // a note, optional: a detail about this session; the task says what it was
         field(ui, "Note", None, None, |ui| input(ui, &mut ed.entry.description, Field::new("Note", w).hint("Optional: a detail about this session")));
         ui.add_space(GROUP_GAP - ROW_GAP);
-        // tags: free words, separated by commas; a second way to classify, across projects
-        let tags_id = egui::Id::new(("edit-tags", &ed.entry.id));
-        let mut tags = ui.data(|d| d.get_temp::<String>(tags_id)).unwrap_or_else(|| ed.entry.tags.join(", "));
-        field(ui, "Tags", None, None, |ui| input(ui, &mut tags, Field::new("Tags", w).hint("e.g. meeting, urgent — separated by commas")));
-        ed.entry.tags = tags.split(',').map(|t| t.trim().trim_start_matches('#').to_string()).filter(|t| !t.is_empty()).collect();
-        ui.data_mut(|d| d.insert_temp(tags_id, tags));
+        // tags: one list, a second way to classify across projects
+        let pick = field(ui, "Tags", None, None, |ui| tag_picker(ui, ("edit-tags", &ed.entry.id), &app.store.db, &mut ed.entry.tags, Trigger::Field(w)));
+        tag_picked(app, pick, &mut ed.entry.tags);
         ui.add_space(ROW_GAP);
         checkbox(ui, &mut ed.entry.billable, tr("Billable"));
         if let Some(g) = ed.errors.get("general") {
@@ -2709,7 +3207,6 @@ pub fn edit_modal(app: &mut App, ctx: &egui::Context) {
         }
     }
     if close {
-        ctx.data_mut(|d| d.remove::<String>(egui::Id::new(("edit-tags", &ed.entry.id))));
         // back to where the editor was opened: same period, filter, scroll and highlighted row
         app.restore_focus(ctx);
     } else {
@@ -2787,6 +3284,9 @@ pub fn past_modal(app: &mut App, ctx: &egui::Context) {
         // a note, optional: the task says what it was
         field(ui, "Note", None, None, |ui| input(ui, &mut past.desc, Field::new("Note", w).hint("Optional: a detail about this session")));
         ui.add_space(ROW_GAP);
+        let pick = field(ui, "Tags", None, None, |ui| tag_picker(ui, "past-tags", &app.store.db, &mut past.tags, Trigger::Field(w)));
+        tag_picked(app, pick, &mut past.tags);
+        ui.add_space(ROW_GAP);
         checkbox(ui, &mut past.billable, tr("Billable"));
         if let Some(g) = past.errors.get("general") {
             ui.label(RichText::new(g).size(12.0).color(c.red));
@@ -2849,7 +3349,7 @@ pub fn build_past(t: &Past) -> Result<TimeEntry, (&'static str, String)> {
         let e = parse_clock(&t.end).ok_or(("end", "Enter a time from 00:00 to 23:59".to_string()))?;
         local_time_of(end_date, e)
     };
-    let e = TimeEntry { id: new_id(), description: t.desc.trim().to_string(), project_id: t.project.clone(), task_id: t.task.clone(), start, stop: Some(stop), billable: t.billable, ..Default::default() };
+    let e = TimeEntry { id: new_id(), description: t.desc.trim().to_string(), project_id: t.project.clone(), task_id: t.task.clone(), start, stop: Some(stop), billable: t.billable, tags: t.tags.clone(), ..Default::default() };
     validate(&e).map_err(|m| ("general", m))?;
     Ok(e)
 }
@@ -2894,6 +3394,174 @@ mod session_panel_tests {
 
     fn demo() -> App {
         App::new(Store::in_memory(build_state(now_secs(), DemoState::Ready, false)), None)
+    }
+
+    /// In the list, a click on a session's #tag shows only that tag's sessions and opens nothing;
+    /// a click elsewhere on the row still opens the editor.
+    #[test]
+    fn a_click_on_a_tag_filters_the_list_and_opens_nothing() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
+        let e = app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some()).max_by_key(|e| e.start).cloned().expect("a daily meeting");
+        let period = Period::containing(PeriodKind::Day, local_date(e.start), app.store.db.settings.week_starts_monday);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1600.0));
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            let shown: Vec<TimeEntry> = entries_in(&app.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| ledger(app, ui, &shown, &period));
+            });
+        };
+        let click = |app: &mut App, frame: &mut dyn FnMut(&mut App, Vec<egui::Event>), pos: egui::Pos2| {
+            let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            frame(app, vec![button(true)]);
+            frame(app, vec![button(false)]);
+        };
+        frame(&mut app, vec![]);
+        let row = ctx.read_response(egui::Id::new(("row", &e.id, e.start))).expect("the row is drawn").rect;
+        // the title opens the editor
+        click(&mut app, &mut frame, egui::pos2(row.left() + 60.0, row.top() + 22.0));
+        assert!(app.today.edit.is_some(), "a click on the row opens the session");
+        assert!(app.today.tag_filter.is_none());
+        // along the grey line, the first spot that filters is the tag
+        app.today.edit = None;
+        let mut x = row.left() + 14.0;
+        while app.today.tag_filter.is_none() && x < row.left() + 400.0 {
+            click(&mut app, &mut frame, egui::pos2(x, row.top() + 46.0));
+            app.today.edit = None;
+            x += 3.0;
+        }
+        assert_eq!(app.today.tag_filter, Some(TagFilter::Tag("riunione".into())));
+    }
+
+    /// The box in a row's dot ticks it without opening it; while sessions are ticked a click on
+    /// a row ticks it too, and Esc lets them all go.
+    #[test]
+    fn rows_tick_from_their_box_and_then_from_anywhere() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
+        let day = local_date(app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some()).map(|e| e.start).max().unwrap());
+        let period = Period::containing(PeriodKind::Day, day, app.store.db.settings.week_starts_monday);
+        let shown: Vec<TimeEntry> = {
+            let mut v: Vec<TimeEntry> = entries_in(&app.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();
+            v.sort_by_key(|e| e.start);
+            v
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1600.0));
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| ledger(app, ui, &shown, &period));
+            });
+        };
+        let click = |app: &mut App, frame: &mut dyn FnMut(&mut App, Vec<egui::Event>), pos: egui::Pos2| {
+            let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            frame(app, vec![button(true)]);
+            frame(app, vec![button(false)]);
+        };
+        frame(&mut app, vec![]);
+        let rect = |id: &TimeEntry, a: i64| ctx.read_response(egui::Id::new(("row", &id.id, a))).expect("the row is drawn").rect;
+        let (first, second) = (&shown[0], &shown[1]);
+        let r1 = rect(first, first.start);
+        click(&mut app, &mut frame, egui::pos2(r1.left() + 19.5, r1.top() + 21.0));
+        assert!(app.today.selected.contains(&first.id), "the box ticks the row");
+        assert!(app.today.edit.is_none(), "and opens nothing");
+        let r2 = rect(second, second.start);
+        click(&mut app, &mut frame, egui::pos2(r2.left() + 200.0, r2.top() + 22.0));
+        assert!(app.today.selected.contains(&second.id) && app.today.edit.is_none(), "while ticking, the row ticks");
+        // the bar takes a tag onto both at once
+        let ids: Vec<Id> = app.today.selected.iter().cloned().collect();
+        app.store.tag_entries(&ids, Some("da rivedere"), None);
+        assert!(ids.iter().all(|id| app.store.db.entries[id].tags.iter().any(|t| t == "Da rivedere")), "the list's spelling");
+        frame(&mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+        assert!(app.today.selected.is_empty());
+    }
+
+    /// Space on the focused row ticks it (Enter would open it); the filtered calendar still
+    /// draws the sessions the filter leaves out, so their hours never look free.
+    #[test]
+    fn space_ticks_a_row_and_the_filtered_calendar_keeps_every_session() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
+        let e = app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some()).max_by_key(|e| e.start).cloned().unwrap();
+        let day = local_date(e.start);
+        let period = Period::containing(PeriodKind::Day, day, app.store.db.settings.week_starts_monday);
+        let shown: Vec<TimeEntry> = entries_in(&app.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 2400.0));
+        let mut frame = |app: &mut App, events: Vec<egui::Event>, cal: bool| {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if cal {
+                        let f = Some(TagFilter::Tag("sviluppo".into()));
+                        timeline_in(app, ui, &shown, &period, true, f.as_ref());
+                    } else {
+                        ledger(app, ui, &shown, &period);
+                    }
+                });
+            });
+        };
+        frame(&mut app, vec![], false);
+        let id = egui::Id::new(("row", &e.id, e.start));
+        ctx.memory_mut(|m| m.request_focus(id));
+        frame(&mut app, vec![], false);
+        let key = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+        frame(&mut app, vec![key(true)], false);
+        frame(&mut app, vec![key(false)], false);
+        assert!(app.today.selected.contains(&e.id), "Space ticks the focused row");
+        assert!(app.today.edit.is_none(), "and opens nothing");
+        // the meeting has no #sviluppo: still a block in the filtered calendar
+        frame(&mut app, vec![], true);
+        assert!(ctx.read_response(egui::Id::new(("tl", &e.id, day))).is_some(), "a session out of the filter is still drawn");
+    }
+
+    /// In the calendar, dragging a block's upper edge moves its start and keeps its end; its
+    /// lower edge moves the end and keeps the start.
+    #[test]
+    fn calendar_blocks_stretch_from_either_edge() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = demo();
+        let now = now_secs();
+        // a finished session of an earlier day, at least an hour long and wholly inside it
+        let e = app.store.db.live_entries().filter(|e| e.stop.is_some_and(|s| s - e.start >= 3600 && local_date(s) == local_date(e.start) && local_date(e.start) < today())).max_by_key(|e| e.start).cloned().expect("a long finished session");
+        app.store.db.settings.lock_until = None;
+        let day = local_date(e.start);
+        let period = Period::containing(PeriodKind::Day, day, app.store.db.settings.week_starts_monday);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 2400.0));
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            let entries: Vec<TimeEntry> = entries_in(&app.store.db, &period, now).into_iter().cloned().collect();
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| timeline_in(app, ui, &entries, &period, true, None));
+            });
+        };
+        let mut drag = |app: &mut App, from: egui::Pos2, dy: f32| {
+            let to = from + egui::vec2(0.0, dy);
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            frame(app, vec![egui::Event::PointerMoved(from)]);
+            frame(app, vec![button(from, true)]);
+            frame(app, vec![egui::Event::PointerMoved(from + egui::vec2(0.0, dy / 4.0))]);
+            frame(app, vec![egui::Event::PointerMoved(to)]);
+            frame(app, vec![button(to, false)]);
+            frame(app, vec![]);
+        };
+        frame(&mut app, vec![]);
+        let block = ctx.read_response(egui::Id::new(("tl", &e.id, day))).expect("the block is drawn").rect;
+        // the upper edge, up by a good part of an hour
+        drag(&mut app, egui::pos2(block.center().x, block.top() + 2.0), -40.0);
+        let moved = app.store.db.live_entries().find(|x| x.id == e.id).cloned().unwrap();
+        assert!(moved.start < e.start, "the start moved earlier");
+        assert_eq!(moved.stop, e.stop.map(|s| s - s.rem_euclid(60)), "the end stays, in whole minutes");
+        assert_eq!(moved.start % 60, 0);
+        frame(&mut app, vec![]);
+        let block = ctx.read_response(egui::Id::new(("tl", &e.id, day))).unwrap().rect;
+        drag(&mut app, egui::pos2(block.center().x, block.bottom() - 2.0), -40.0);
+        let shrunk = app.store.db.live_entries().find(|x| x.id == e.id).cloned().unwrap();
+        assert_eq!(shrunk.start, moved.start, "the start stays");
+        assert!(shrunk.stop < moved.stop, "the end moved earlier");
     }
 
     /// A day off with no sessions (Sunday, Day view) used to leave the calendar with no column,
@@ -2986,6 +3654,30 @@ mod session_panel_tests {
     }
 
     #[test]
+    fn a_hash_word_at_the_end_asks_for_tags_and_a_number_stays_a_work_item() {
+        assert_eq!(tag_token("Login fix #fro"), Some(("Login fix".into(), "fro".into())));
+        assert_eq!(tag_token("#"), Some(("".into(), "".into())));
+        assert_eq!(tag_token("#4812"), None, "a #number is a work item");
+        assert_eq!(tag_token("#4812 Login page"), None);
+        assert_eq!(tag_token("Login #fro "), None, "a space ends the tag word");
+        let mut app = demo();
+        for t in ["frontend", "review", "Front office"] {
+            app.store.create_tag(t);
+        }
+        let list = suggestions(&app.store.db, "Login fix #fro", None);
+        let names: Vec<String> = list.iter().map(|s| match s { Suggest::Tag(n) => format!("t:{n}"), Suggest::NewTag(n) => format!("new:{n}"), _ => "other".into() }).collect();
+        assert_eq!(names, vec!["t:Front office", "t:frontend", "new:fro"], "tags only, then the word as a new tag");
+        let exact = suggestions(&app.store.db, "#review", None);
+        assert!(!exact.iter().any(|s| matches!(s, Suggest::NewTag(..))), "no new tag for a name that exists");
+        // a near spelling finds the tag already there, and offers no near copy
+        app.store.create_tag("Code review");
+        let near = suggestions(&app.store.db, "#code-review", None);
+        assert!(near.iter().any(|s| matches!(s, Suggest::Tag(n) if n == "Code review")), "code-review finds Code review");
+        assert!(!near.iter().any(|s| matches!(s, Suggest::NewTag(..))), "and offers no new tag");
+        assert_eq!(devtrack_core::model::tag_key("Code-Review "), devtrack_core::model::tag_key("code review"));
+    }
+
+    #[test]
     fn suggestions_match_project_names_and_never_repeat() {
         let app = demo();
         let pr = app.store.db.live_projects().into_iter().next().cloned().expect("a demo project");
@@ -2994,7 +3686,7 @@ mod session_panel_tests {
         assert!(!list.is_empty(), "typing part of a project name suggests something");
         let mut keys = vec![];
         for s in &list {
-            let k = match s { Suggest::Task(id) => format!("t:{id}"), Suggest::Project(id) => format!("p:{id}"), Suggest::Remote(n) => format!("r:{n}"), Suggest::LookUp(n) => format!("l:{n}"), Suggest::Refresh => "refresh".into() };
+            let k = match s { Suggest::Task(id) => format!("t:{id}"), Suggest::Project(id) => format!("p:{id}"), Suggest::Remote(n) => format!("r:{n}"), Suggest::LookUp(n) => format!("l:{n}"), Suggest::Refresh => "refresh".into(), Suggest::Tag(n) | Suggest::NewTag(n) => format!("g:{n}") };
             assert!(!keys.contains(&k), "duplicate suggestion");
             keys.push(k);
         }
@@ -3105,7 +3797,7 @@ pub fn conversions_icon(ui: &mut egui::Ui, salt: impl std::hash::Hash, profiles:
 
 
 /// The compact window's session editor, with only what a quick fix needs (task, project,
-/// duration, start → end, day), Delete and Save; notes, tags, billable and the client are in the
+/// duration, start → end, day, tags), Delete and Save; notes, billable and the client are in the
 /// full window's editor. Where the system lets an app place its windows it opens as a small window
 /// of its own beside the compact one, as other trackers do; otherwise (Linux on Wayland, embedded
 /// viewports, review pictures) as a popover by the row. Esc, ✕ and a click elsewhere close it,
@@ -3265,6 +3957,9 @@ fn compact_edit_body(app: &mut App, ui: &mut egui::Ui, ed: &mut Edit, w: f32) ->
     if let Some(m) = ed.errors.get("project").cloned() {
         ui.label(RichText::new(tr(&m)).size(12.0).color(c.red));
     }
+    // its tags, the same field as the full editor's
+    let tp = tag_picker(ui, "compact-edit-tags", &app.store.db, &mut ed.entry.tags, Trigger::Field(w));
+    tag_picked(app, tp, &mut ed.entry.tags);
     ui.add_space(4.0);
     // the time: the duration first (as it reads in the row), then start → end and the day
     let bad = |k: &str| ed.errors.contains_key(k);

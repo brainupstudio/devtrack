@@ -94,6 +94,17 @@ pub enum ActTab {
     Tasks,
     Projects,
     Clients,
+    Tags,
+}
+
+/// What the Tags tab is doing with one tag: naming a new one, renaming one in its row, asking to
+/// merge two (a rename to a name another tag has), or asking before a delete.
+#[derive(Clone, PartialEq)]
+pub enum TagEdit {
+    New(String),
+    Rename(Id, String),
+    Merge { from: Id, into: Id },
+    Delete(Id),
 }
 
 /// One step below a Work tab: a client or a project, in the order they were opened. The
@@ -238,6 +249,8 @@ pub struct ActState {
     pub all_project: ProjectFilter,
     pub all_source: SourceFilter,
     pub all_estimate: EstimateFilter,
+    /// Tasks with a session carrying this tag, or with no tagged session at all.
+    pub all_tag: Option<TagFilter>,
     /// The task whose sessions are listed under its row on the Tasks tab (apart from the
     /// project's, so each list keeps its own open row).
     pub all_open: Option<Id>,
@@ -247,6 +260,9 @@ pub struct ActState {
     pub all_sessions: Option<Id>,
     /// Clients tab: active, archived or all.
     pub client_status: StatusFilter,
+    /// Tags tab: the search, and what is being done to a tag.
+    pub tag_search: String,
+    pub tag_edit: Option<TagEdit>,
 }
 
 impl ActState {
@@ -372,6 +388,7 @@ pub fn open_task(app: &mut App, task: &Task) {
     app.act.all_project = ProjectFilter::All;
     app.act.all_source = SourceFilter::All;
     app.act.all_estimate = EstimateFilter::All;
+    app.act.all_tag = None;
     if task.done && app.act.all_show == 0 {
         app.act.all_show = 2;
     }
@@ -413,9 +430,10 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     let projects_tab = format!("{} {}", tr("Projects"), n_projects);
     let tasks_tab = format!("{} {}", tr("Tasks"), n_tasks);
     let clients_tab = format!("{} {}", tr("Clients"), n_clients);
-    let current = match app.act.tab { ActTab::Tasks => 0, ActTab::Projects => 1, ActTab::Clients => 2 };
-    if let Some(i) = segmented(ui, &[&tasks_tab, &projects_tab, &clients_tab], current) {
-        app.act.open_root(match i { 1 => ActTab::Projects, 2 => ActTab::Clients, _ => ActTab::Tasks });
+    let tags_tab = format!("{} {}", tr("Tags"), app.store.db.live_tags().len());
+    let current = match app.act.tab { ActTab::Tasks => 0, ActTab::Projects => 1, ActTab::Clients => 2, ActTab::Tags => 3 };
+    if let Some(i) = segmented_or_select(ui, "work-tabs", &[&tasks_tab, &projects_tab, &clients_tab, &tags_tab], current) {
+        app.act.open_root(match i { 1 => ActTab::Projects, 2 => ActTab::Clients, 3 => ActTab::Tags, _ => ActTab::Tasks });
         app.fade_content();
     }
     ui.add_space(GROUP_GAP);
@@ -423,6 +441,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
         ActTab::Projects => browser(app, ui),
         ActTab::Clients => clients_tab_ui(app, ui),
         ActTab::Tasks => tasks_tab_ui(app, ui),
+        ActTab::Tags => tags_tab_ui(app, ui),
     }
 }
 
@@ -495,17 +514,27 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.set_min_height(CTRL_H);
         ui.spacing_mut().item_spacing = egui::vec2(ROW_GAP, ROW_GAP);
-        // a pixel short of a quarter: rounding must not push the last one to a new row
-        let third = if narrow { w } else { ((w - ROW_GAP * 3.0) / 4.0).floor() - 1.0 };
+        // the tag menu only where there are tags (or one is still chosen)
+        let tags = !app.store.db.live_tags().is_empty() || app.act.all_tag.is_some();
+        let n = if tags { 5.0 } else { 4.0 };
+        // a pixel short of an equal share: rounding must not push the last one to a new row
+        let third = if narrow { w } else { ((w - ROW_GAP * (n - 1.0)) / n).floor() - 1.0 };
         select_searchable(ui, "all-task-client", &mut app.act.all_client, &client_opts, third);
         select_searchable(ui, "all-task-project", &mut app.act.all_project, &project_opts, third);
         select(ui, "all-task-source", &mut app.act.all_source, &source_opts, third, false);
         select(ui, "all-task-estimate", &mut app.act.all_estimate, &estimate_opts, third, false);
+        if tags {
+            let mut f = app.act.all_tag.clone();
+            if tag_filter_with(ui, "all-task-tag", &app.store.db, &mut f, third, true) {
+                app.act.all_tag = f;
+            }
+        }
     });
     ui.add_space(GROUP_GAP - ROW_GAP);
     let q = app.act.all_query.trim().to_string();
     let db = &app.store.db;
     let (fc, fp, fs, fe) = (app.act.all_client.clone(), app.act.all_project.clone(), app.act.all_source, app.act.all_estimate);
+    let ft = app.act.all_tag.clone();
     let scope = db.live_tasks().filter(|t| match app.act.all_show { 0 => !t.done, 1 => t.done, _ => true }).count();
     let mut rows: Vec<(Task, String, String, Option<i64>, i64)> = db
         .live_tasks()
@@ -521,7 +550,13 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
                 EstimateFilter::Over => t.planned_secs().is_some_and(|est| db.task_total(&t.id, now) > est),
                 EstimateFilter::Missing => t.planned_secs().is_none(),
             };
-            client_ok && project_ok && source_ok && estimate_ok
+            // a task has the tags of its sessions
+            let tag_ok = match &ft {
+                None => true,
+                Some(f @ TagFilter::Tag(_)) => db.live_entries().any(|e| e.task_id.as_deref() == Some(t.id.as_str()) && f.matches(e)),
+                Some(TagFilter::Untagged) => db.live_entries().all(|e| e.task_id.as_deref() != Some(t.id.as_str()) || TagFilter::Untagged.matches(e)),
+            };
+            client_ok && project_ok && source_ok && estimate_ok && tag_ok
         })
         .map(|t| {
             let pr = db.project(&t.project_id);
@@ -540,7 +575,7 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
         .collect();
     // most recent work first; tasks never tracked follow, by name
     rows.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.0.title.to_lowercase().cmp(&b.0.title.to_lowercase())));
-    let filtered = !q.is_empty() || app.act.all_client != ClientFilter::All || app.act.all_project != ProjectFilter::All || app.act.all_source != SourceFilter::All || app.act.all_estimate != EstimateFilter::All;
+    let filtered = !q.is_empty() || app.act.all_client != ClientFilter::All || app.act.all_project != ProjectFilter::All || app.act.all_source != SourceFilter::All || app.act.all_estimate != EstimateFilter::All || app.act.all_tag.is_some();
     let mut clear = false;
     ui.horizontal(|ui| {
         ui.set_min_height(28.0);
@@ -557,7 +592,7 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     if rows.is_empty() {
         let title = if filtered { "No task matches these filters" } else { match app.act.all_show { 0 => "No open tasks", 1 => "No done tasks", _ => "No tasks" } };
-        empty_state(ui, Icon::Activities, title, "Change the search, client, project, source or estimates, or which tasks to show.", |ui| {
+        empty_state(ui, Icon::Activities, title, "Change the search, client, project, source, estimates or tag, or which tasks to show.", |ui| {
             if filtered { clear = secondary(ui, "Clear filters").clicked(); }
         });
     }
@@ -567,6 +602,7 @@ fn tasks_tab_ui(app: &mut App, ui: &mut egui::Ui) {
         app.act.all_project = ProjectFilter::All;
         app.act.all_source = SourceFilter::All;
         app.act.all_estimate = EstimateFilter::All;
+        app.act.all_tag = None;
     }
     if rows.is_empty() { return; }
     let tasks: Vec<Task> = rows.into_iter().map(|r| r.0).collect();
@@ -851,9 +887,9 @@ fn crumb_name(app: &App, c: &Crumb) -> String {
 /// step opened since (links), and the current record. Every link returns to that level.
 fn detail_navigation(app: &mut App, ui: &mut egui::Ui, current: &str) -> bool {
     let trail: Vec<Crumb> = app.act.trail().to_vec();
-    let root_name = match app.act.tab { ActTab::Tasks => "Tasks", ActTab::Projects => "Projects", ActTab::Clients => "Clients" };
+    let root_name = match app.act.tab { ActTab::Tasks => "Tasks", ActTab::Projects => "Projects", ActTab::Clients => "Clients", ActTab::Tags => "Tags" };
     let back_label = match trail.len() {
-        0 | 1 => tr(match app.act.tab { ActTab::Tasks => "Back to tasks", ActTab::Projects => "Back to projects", ActTab::Clients => "Back to clients" }),
+        0 | 1 => tr(match app.act.tab { ActTab::Tasks => "Back to tasks", ActTab::Projects => "Back to projects", ActTab::Clients => "Back to clients", ActTab::Tags => "Back to tags" }),
         n => trf(match &trail[n - 2] { Crumb::Client(_) => "Back to client {}", Crumb::Project(_) => "Back to project {}" }, &[&truncate(&crumb_name(app, &trail[n - 2]), 32)]),
     };
     let mut back = false;
@@ -1416,6 +1452,236 @@ fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+/// The Tags tab: every tag with how many sessions carry it and their time. A tag is renamed in
+/// its row (a name another tag has asks to merge the two), deleted after a question that says
+/// how many sessions it leaves (Undo brings it back), or created from "+ New tag".
+fn tags_tab_ui(app: &mut App, ui: &mut egui::Ui) {
+    let c = p(ui);
+    let now = devtrack_core::store::now_secs();
+    let available = ui.available_width();
+    ui.horizontal_wrapped(|ui| {
+        ui.set_min_height(CTRL_H);
+        let new_w = ui.painter().layout_no_wrap(tr("+ New tag"), medium(14.0), c.text).size().x + PAD_X * 2.0;
+        let search_w = if available < 480.0 { available } else { available - new_w - ROW_GAP };
+        search_field(ui, &mut app.act.tag_search, "Search tags", "Looks in the tag's name.", search_w);
+        if available < 480.0 { ui.end_row(); }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if primary(ui, "+ New tag").clicked() {
+                app.act.tag_edit = Some(TagEdit::New(app.act.tag_search.trim().to_string()));
+            }
+        });
+    });
+    ui.add_space(ROW_GAP);
+    tag_edit_panel(app, ui);
+    let tags: Vec<Tag> = app.store.db.live_tags().into_iter().cloned().collect();
+    if tags.is_empty() {
+        if app.act.tag_edit.is_none() {
+            col(ui, 480.0f32.min(ui.available_width()), 0.0, |ui| {
+                panel(ui, |ui| {
+                    ui.label(RichText::new(tr("No tags yet")).font(medium(16.0)));
+                    muted(ui, "A tag says what kind of work a session was (meeting, review, support), whatever the project. Add them to sessions from the timer, by typing #tag, or here.");
+                });
+            });
+        }
+        return;
+    }
+    // how many sessions carry each tag, and their time
+    let mut usage: std::collections::BTreeMap<String, (i64, i64)> = Default::default();
+    for e in app.store.db.live_entries() {
+        for t in &e.tags {
+            let u = usage.entry(t.to_lowercase()).or_default();
+            u.0 += 1;
+            u.1 += e.duration(now);
+        }
+    }
+    let q = app.act.tag_search.trim().to_lowercase();
+    // as every tag search: "code-review" finds "Code review"
+    let list: Vec<Tag> = tags.iter().filter(|t| q.is_empty() || tag_matches(&t.name, &q)).cloned().collect();
+    ui.horizontal(|ui| {
+        ui.set_min_height(28.0);
+        if list.len() == tags.len() {
+            mixed(ui, &plural(tags.len() as i64, "{} tag", "{} tags"), 12.0, Some(c.text2));
+        } else {
+            mixed(ui, &trf("{} of {} tags", &[&list.len(), &tags.len()]), 12.0, Some(c.text2));
+        }
+        // the counts on the rows are not this week's or month's: say so once
+        mixed(ui, &format!("·  {}", tr("sessions and time over everything tracked")), 12.0, Some(c.text2));
+    });
+    ui.add_space(4.0);
+    if list.is_empty() {
+        let mut clear = false;
+        empty_state(ui, Icon::Activities, "No tags match this search", "Change the search, or create the tag with “+ New tag”.", |ui| {
+            clear = secondary(ui, "Clear search").clicked();
+        });
+        if clear { app.act.tag_search.clear(); }
+        return;
+    }
+    let w = ui.available_width();
+    let mut action: Option<TagEdit> = None;
+    let mut save: Option<(Id, String)> = None;
+    let mut cancel = false;
+    let editing = app.act.tag_edit.clone();
+    let scroll = egui::ScrollArea::vertical().id_salt("tags").auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let table_top = ui.cursor().top();
+        for (ri, t) in list.iter().enumerate() {
+            let (n, secs) = usage.get(&t.name.to_lowercase()).copied().unwrap_or((0, 0));
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 52.0), Sense::hover());
+            let round = egui::CornerRadius { nw: if ri == 0 { 9 } else { 0 }, ne: if ri == 0 { 9 } else { 0 }, sw: if ri + 1 == list.len() { 9 } else { 0 }, se: if ri + 1 == list.len() { 9 } else { 0 } };
+            let hot = resp.hovered() || ui.rect_contains_pointer(rect);
+            ui.painter().rect_filled(rect, round, hover_mix(ui, resp.id, hot, Color32::TRANSPARENT, c.hover));
+            app.geometry.rows.push((format!("tag row · {}", t.id), rect));
+            let y = rect.center().y;
+            let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(14.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            row.spacing_mut().item_spacing.x = ROW_GAP;
+            match &editing {
+                Some(TagEdit::Rename(id, name)) if id == &t.id => {
+                    // renamed in its row: the field, then Save and Cancel; Enter saves, Esc cancels
+                    let mut v = name.clone();
+                    let field_w = (rect.width() - 28.0 - 200.0).clamp(160.0, 360.0);
+                    let r = input(&mut row, &mut v, Field::new("Tag name", field_w).hint("Tag name"));
+                    if !r.has_focus() && !r.lost_focus() && v == t.name {
+                        r.request_focus();
+                    }
+                    if v != *name {
+                        action = Some(TagEdit::Rename(id.clone(), v.clone()));
+                    }
+                    let enter = r.lost_focus() && row.input(|i| i.key_pressed(egui::Key::Enter));
+                    if primary(&mut row, "Save").clicked() || enter {
+                        save = Some((id.clone(), v.clone()));
+                    }
+                    if ghost(&mut row, "Cancel").clicked() || row.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        cancel = true;
+                    }
+                }
+                _ => {
+                    let name_job = mixed_job(&format!("#{}", t.name), 14.0, c.text, medium(14.0), medium(14.0));
+                    row.add(egui::Label::new(name_job).truncate().selectable(false));
+                    row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        if ghost(ui, "Delete…").on_hover_text(tr("Remove this tag from its sessions")).clicked() {
+                            action = Some(TagEdit::Delete(t.id.clone()));
+                        }
+                        if ghost(ui, "Rename").clicked() {
+                            action = Some(TagEdit::Rename(t.id.clone(), t.name.clone()));
+                        }
+                        ui.add_space(GROUP_GAP);
+                        let used = if n == 0 { tr("No sessions") } else { format!("{} · {}", plural(n, "{} session", "{} sessions"), words(secs)) };
+                        ui.label(egui::WidgetText::from(mixed_job(&used, 13.0, c.text2, sans(13.0), mono_font(13.0))));
+                    });
+                }
+            }
+            let _ = y;
+            divider(ui);
+        }
+        table_border(ui, table_top);
+    });
+    scroll_fades(ui, &scroll, p(ui).canvas);
+    if let Some((id, name)) = save {
+        match app.store.rename_tag(&id, &name) {
+            Ok(n) => {
+                app.act.tag_edit = None;
+                if n > 0 {
+                    app.notify(trf("Tag renamed on {} sessions", &[&n]));
+                }
+            }
+            Err(into) => app.act.tag_edit = Some(TagEdit::Merge { from: id, into }),
+        }
+    } else if cancel {
+        app.act.tag_edit = None;
+    } else if let Some(a) = action {
+        app.act.tag_edit = Some(a);
+    }
+}
+
+/// The question above the Tags table: a new tag's name, merging two tags, deleting one.
+fn tag_edit_panel(app: &mut App, ui: &mut egui::Ui) {
+    let c = p(ui);
+    let Some(edit) = app.act.tag_edit.clone() else { return };
+    if matches!(edit, TagEdit::Rename(..)) { return; }
+    let count = |app: &App, name: &str| app.store.db.live_entries().filter(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(name))).count();
+    let name_of = |app: &App, id: &Id| app.store.db.tags.get(id).map(|t| t.name.clone()).unwrap_or_default();
+    let w = 480.0f32.min(ui.available_width());
+    let mut next: Option<Option<TagEdit>> = None;
+    col(ui, w, 0.0, |ui| {
+        panel(ui, |ui| {
+            ui.set_width(ui.available_width());
+            match &edit {
+                TagEdit::Rename(..) => {}
+                TagEdit::New(name) => {
+                    ui.label(RichText::new(tr("New tag")).font(medium(16.0)));
+                    ui.add_space(ROW_GAP);
+                    let mut v = name.clone();
+                    let r = input(ui, &mut v, Field::new("Tag name", ui.available_width()).hint("e.g. meeting"));
+                    if !r.has_focus() && !r.lost_focus() && v.is_empty() {
+                        r.request_focus();
+                    }
+                    let typed = clean_tag(&v);
+                    let exists = app.store.db.tag_named(&typed).map(|t| t.name.clone());
+                    if let Some(e) = &exists {
+                        mixed(ui, &trf("“{}” is already a tag.", &[e]), 12.0, Some(c.amber));
+                    }
+                    ui.add_space(ROW_GAP);
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        let ok = !typed.is_empty() && exists.is_none();
+                        if button_w(ui, Kind::Primary, "Add tag", 0.0, ok).clicked() || (enter && ok) {
+                            if let Some(n) = app.store.create_tag(&typed) {
+                                app.notify(trf("Tag “{}” created", &[&truncate(&n, 40)]));
+                            }
+                            next = Some(None);
+                        }
+                        if ghost(ui, "Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            next = Some(None);
+                        }
+                    });
+                    if next.is_none() && v != *name {
+                        next = Some(Some(TagEdit::New(v)));
+                    }
+                }
+                TagEdit::Merge { from, into } => {
+                    let (f, i) = (name_of(app, from), name_of(app, into));
+                    ui.label(RichText::new(trf("“{}” is already a tag", &[&i])).font(medium(16.0)));
+                    mixed(ui, &trf("Merge “{}” into it? Its {} session(s) take “{}”, and “{}” goes.", &[&f, &count(app, &f), &i, &f]), 13.0, Some(c.text2));
+                    ui.add_space(ROW_GAP);
+                    ui.horizontal(|ui| {
+                        if primary(ui, "Merge").clicked() {
+                            let n = app.store.merge_tags(from, into);
+                            app.notify(trf("Tags merged: {} sessions now have “{}”", &[&n, &i]));
+                            next = Some(None);
+                        }
+                        if ghost(ui, "Keep both").clicked() {
+                            next = Some(None);
+                        }
+                    });
+                }
+                TagEdit::Delete(id) => {
+                    let name = name_of(app, id);
+                    let n = count(app, &name);
+                    ui.label(RichText::new(trf("Delete “{}”?", &[&name])).font(medium(16.0)).color(c.red));
+                    let body = if n == 0 { tr("No session has it.") } else { trf("It leaves {} session(s); the sessions stay.", &[&n]) };
+                    mixed(ui, &body, 13.0, Some(c.text2));
+                    ui.add_space(ROW_GAP);
+                    ui.horizontal(|ui| {
+                        if danger(ui, "Delete tag").clicked() {
+                            app.store.delete_tag(id);
+                            app.notify_undo(trf("Tag “{}” deleted", &[&truncate(&name, 40)]));
+                            next = Some(None);
+                        }
+                        if ghost(ui, "Keep").clicked() {
+                            next = Some(None);
+                        }
+                    });
+                }
+            }
+        });
+    });
+    if let Some(n) = next {
+        app.act.tag_edit = n;
+    }
+    ui.add_space(GROUP_GAP);
+}
+
 fn client_edit_panel(app: &mut App, ui: &mut egui::Ui) {
     let c = p(ui);
     let Some(edit) = app.act.client_edit.clone() else { return };
@@ -1697,6 +1963,7 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
         // the task's finished sessions, newest first: the date column and the list under the row
         let mut sessions: Vec<TimeEntry> = app.store.db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).cloned().collect();
         sessions.sort_by_key(|e| std::cmp::Reverse(e.start));
+        let tag_counts = tag_counts(&app.store.db, &sessions);
         let open = open_id.as_deref() == Some(t.id.as_str());
         let row_resp = ui.horizontal_wrapped(|ui| {
             ui.set_min_height(56.0);
@@ -1736,6 +2003,11 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
                         _ => tr("No project"),
                     });
                 }
+                // the task's tags once, most used first, before the source details (which give
+                // way first when the line is cut)
+                if !tag_counts.is_empty() {
+                    sub.push(tag_summary(&tag_counts));
+                }
                 match &t.external_id {
                     Some(id) if t.source == SOURCE_AZURE => {
                         sub.push(format!("DevOps #{}", id));
@@ -1752,8 +2024,12 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
                 if t.unavailable {
                     sub.push(tr("not accessible at last refresh"));
                 }
-                let job = mixed_job(&sub.join(" · "), 12.0, if t.unavailable { c.amber } else { c.text2 }, sans(12.0), mono_font(12.0));
-                ui.add(egui::Label::new(job).truncate());
+                let line = sub.join(" · ");
+                let job = mixed_job(&line, 12.0, if t.unavailable { c.amber } else { c.text2 }, sans(12.0), mono_font(12.0));
+                // the tags behind "+N", on the pointer; it replaces egui's own tip for a cut line,
+                // or the two would show one over the other
+                let hover = all_tags_hover(&line, &tag_counts);
+                cut_line(ui, job, hover);
             });
             if w < 560.0 { ui.end_row(); }
             if date_w > 0.0 {
@@ -1885,6 +2161,10 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
                         None => { meta(ui, "How long you expect to spend on it. You get a notice once it is passed."); }
                     }
                 });
+                // every tag on the task's sessions, with how many sessions carry it
+                if !tag_counts.is_empty() {
+                    tag_count_row(ui, &tag_counts, sessions.len());
+                }
                 ui.add_space(4.0);
                 if sessions.is_empty() && t.source != SOURCE_AZURE {
                     meta(ui, "No sessions on this task yet.");
@@ -1912,7 +2192,10 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
                             ui.set_max_width((ui.available_width() - 170.0).max(60.0));
                             // under its task, a session is told apart by its note
                             let what = if e.description.trim().is_empty() { tr("No note") } else { e.description.clone() };
-                            ui.add(egui::Label::new(RichText::new(&what).size(13.0)).truncate()).on_hover_text(&what);
+                            // the task's tags are said once above: here only those that set
+                            // this session apart
+                            let job = note_with_own_tags(ui, &app.store.db, &what, e, &tag_counts, sessions.len());
+                            ui.add(egui::Label::new(job).truncate()).on_hover_text(&what);
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let edit = ui.add_enabled_ui(true, |ui| link_btn(ui, "Edit")).inner;
@@ -2838,4 +3121,79 @@ mod navigation_tests {
 /// for nothing tracked yet rather than a zero clock.
 fn total_text(secs: i64) -> String {
     if secs == 0 { "—".into() } else { words(secs) }
+}
+
+/// A tag name as the list spells it (the name as written when it is not in the list).
+pub(super) fn tag_spelling(db: &devtrack_core::model::Db, name: &str) -> String {
+    db.tag_named(name).map(|t| t.name.clone()).unwrap_or_else(|| name.trim().to_string())
+}
+
+/// The tags on these sessions with how many sessions carry each, most used first, then A–Z.
+/// Spellings that differ only by capitals count as one tag.
+pub(super) fn tag_counts(db: &devtrack_core::model::Db, sessions: &[TimeEntry]) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = vec![];
+    for e in sessions {
+        let mut seen: Vec<String> = vec![];
+        for n in &e.tags {
+            let name = tag_spelling(db, n);
+            if name.is_empty() || seen.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            seen.push(name.clone());
+            match counts.iter_mut().find(|(m, _)| m.eq_ignore_ascii_case(&name)) {
+                Some((_, k)) => *k += 1,
+                None => counts.push((name, 1)),
+            }
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    counts
+}
+
+/// The first tags of a summary for a grey line: "#sviluppo #iOS #PDF +2".
+pub(super) fn tag_summary(counts: &[(String, usize)]) -> String {
+    let mut names: Vec<String> = counts.iter().take(3).map(|(n, _)| format!("#{}", n)).collect();
+    if counts.len() > 3 {
+        names.push(format!("+{}", counts.len() - 3));
+    }
+    names.join(" ")
+}
+
+/// A line that shows `tag_summary` ("#a #b #c +2"), with every tag in its place: what the
+/// pointer shows over the line when some are behind "+N". None when nothing is hidden.
+pub(super) fn all_tags_hover(line: &str, counts: &[(String, usize)]) -> Option<String> {
+    (counts.len() > 3).then(|| {
+        let all = counts.iter().map(|(n, _)| format!("#{}", n)).collect::<Vec<_>>().join(" ");
+        line.replacen(&tag_summary(counts), &all, 1)
+    })
+}
+
+/// A "Tags" row: every tag with how many of the sessions carry it.
+/// With a single session the counts would all be 1, so they are left out.
+pub(super) fn tag_count_row(ui: &mut egui::Ui, counts: &[(String, usize)], total: usize) {
+    let c = p(ui);
+    row(ui, CTRL_H, |ui| {
+        ui.spacing_mut().item_spacing.x = GROUP_GAP;
+        label(ui, "Tags");
+        let text = counts.iter().map(|(n, k)| if total > 1 { format!("#{} {}", n, k) } else { format!("#{}", n) }).collect::<Vec<_>>().join("  ·  ");
+        ui.add(egui::Label::new(RichText::new(text).size(13.0).color(c.text)).wrap()).on_hover_text(tr("Sessions with each tag"));
+    });
+}
+
+/// A session's note followed by the tags that set it apart from the others in the list (those
+/// not on every session); the shared ones are said once above the list.
+pub(super) fn note_with_own_tags(ui: &egui::Ui, db: &devtrack_core::model::Db, what: &str, e: &TimeEntry, counts: &[(String, usize)], total: usize) -> egui::WidgetText {
+    let c = p(ui);
+    let own: Vec<String> = e.tags.iter()
+        .map(|n| tag_spelling(db, n))
+        .filter(|n| counts.iter().any(|(m, k)| m.eq_ignore_ascii_case(n) && *k < total))
+        .map(|n| format!("#{}", n))
+        .collect();
+    if own.is_empty() {
+        return RichText::new(what).size(13.0).into();
+    }
+    let mut j = egui::text::LayoutJob::default();
+    j.append(what, 0.0, egui::TextFormat { font_id: sans(13.0), color: c.text, ..Default::default() });
+    j.append(&format!("  {}", own.join(" ")), 0.0, egui::TextFormat { font_id: sans(12.0), color: c.text2, ..Default::default() });
+    egui::WidgetText::LayoutJob(j)
 }

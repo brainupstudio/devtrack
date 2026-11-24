@@ -94,6 +94,9 @@ pub struct LocalConfig {
     /// day), on this device.
     #[serde(default)]
     pub list_by_task: bool,
+    /// The compact window shows one day's calendar instead of the recent sessions.
+    #[serde(default)]
+    pub compact_calendar: bool,
 }
 
 fn default_true() -> bool {
@@ -127,6 +130,7 @@ impl Default for LocalConfig {
             mcp_enabled: false,
             mcp_azure: false,
             list_by_task: false,
+            compact_calendar: false,
         }
     }
 }
@@ -165,6 +169,10 @@ pub struct Store {
     pub blocked: Option<String>,
     /// Last deleted or discarded entry, for Undo.
     pub last_removed: Option<TimeEntry>,
+    /// The last tag deleted, and its sessions as they were: Undo brings both back.
+    pub last_tag_removed: Option<(Tag, Vec<TimeEntry>)>,
+    /// Sessions as they were before a tag was added to or taken off several at once.
+    pub last_retagged: Option<Vec<TimeEntry>>,
 }
 
 pub fn data_root() -> PathBuf {
@@ -204,7 +212,7 @@ fn read_db(path: &Path) -> Read {
 
 impl Store {
     pub fn in_memory(db: Db) -> Store {
-        Store {
+        let mut s = Store {
             db,
             local: LocalConfig { device_name: "Preview".into(), ..LocalConfig::default() },
             dir: None,
@@ -214,7 +222,11 @@ impl Store {
             status: OpenStatus::InMemory,
             blocked: None,
             last_removed: None,
-        }
+            last_tag_removed: None,
+            last_retagged: None,
+        };
+        s.ensure_tags();
+        s
     }
 
     /// Open DevTrack's folder.
@@ -237,6 +249,8 @@ impl Store {
             status: OpenStatus::Opened,
             blocked: None,
             last_removed: None,
+            last_tag_removed: None,
+            last_retagged: None,
         };
         match read_db(&dir.join("data.json")) {
             Read::Missing => s.status = OpenStatus::FirstLaunch,
@@ -256,6 +270,7 @@ impl Store {
         // versioned migration (schema 2: client records); backed up first, never on a blocked file
         if s.blocked.is_none() && matches!(s.status, OpenStatus::Opened) {
             s.migrate_clients();
+            s.ensure_tags();
         }
         // local.json carries no work data; keep it current unless the folder itself is unreadable
         if !matches!(s.status, OpenStatus::Unreadable(_)) {
@@ -455,6 +470,184 @@ impl Store {
         n
     }
 
+    // ---------- tags ----------
+
+    fn put_tag_quiet(&mut self, mut t: Tag) {
+        t.rev = self.tick();
+        self.db.tags.insert(t.id.clone(), t);
+    }
+
+    /// Every tag on a session is in the list (repeatable; nothing is saved when nothing is
+    /// missing). Names differing only by case are one tag: the first one met keeps its spelling.
+    /// Sessions keep their text; the list is what the picker offers. Returns how many were added.
+    pub fn ensure_tags(&mut self) -> usize {
+        if self.blocked.is_some() {
+            return 0;
+        }
+        let mut names: Vec<String> = vec![];
+        let mut es: Vec<&TimeEntry> = self.db.live_entries().collect();
+        es.sort_by_key(|e| e.start);
+        for e in es {
+            for t in &e.tags {
+                let c = clean_tag(t);
+                if !c.is_empty() && self.db.tag_named(&c).is_none() && !names.iter().any(|n| n.eq_ignore_ascii_case(&c)) {
+                    names.push(c);
+                }
+            }
+        }
+        let n = names.len();
+        for name in names {
+            let t = self.new_tag_record(&name);
+            self.put_tag_quiet(t);
+        }
+        if n > 0 {
+            self.changed();
+        }
+        n
+    }
+
+    /// A new record for a name: the stable id unless another tag (since renamed) holds it.
+    fn new_tag_record(&self, name: &str) -> Tag {
+        let id = tag_id_for(name);
+        match self.db.tags.get(&id) {
+            // a deleted tag of this name comes back rather than being duplicated
+            Some(t) if t.deleted => Tag { name: name.to_string(), deleted: false, ..t.clone() },
+            Some(_) => Tag { id: new_id(), name: name.to_string(), ..Default::default() },
+            None => Tag { id, name: name.to_string(), ..Default::default() },
+        }
+    }
+
+    /// The tag with this name, created when there is none. Returns its name as the list spells
+    /// it ("Meeting" when "meeting" is typed and "Meeting" exists); None for an empty name.
+    pub fn create_tag(&mut self, name: &str) -> Option<String> {
+        let name = clean_tag(name);
+        if name.is_empty() {
+            return None;
+        }
+        if let Some(t) = self.db.tag_named(&name) {
+            return Some(t.name.clone());
+        }
+        let t = self.new_tag_record(&name);
+        self.put_tag_quiet(t);
+        self.changed();
+        Some(name)
+    }
+
+    /// Rewrite the tags of every session that has `from`, in one save. `to` None removes it;
+    /// a session that already has `to` keeps one. Returns how many sessions changed.
+    fn retag_sessions(&mut self, from: &str, to: Option<&str>) -> usize {
+        let hit: Vec<TimeEntry> = self.db.live_entries().filter(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(from))).cloned().collect();
+        let n = hit.len();
+        for mut e in hit {
+            let mut tags: Vec<String> = vec![];
+            for t in &e.tags {
+                let t = if t.eq_ignore_ascii_case(from) { match to { Some(x) => x.to_string(), None => continue } } else { t.clone() };
+                if !tags.iter().any(|x| x.eq_ignore_ascii_case(&t)) {
+                    tags.push(t);
+                }
+            }
+            e.tags = tags;
+            e.rev = self.tick();
+            self.db.entries.insert(e.id.clone(), e);
+        }
+        n
+    }
+
+    /// Rename a tag and its sessions. Err(other tag's id) when another tag already has the name
+    /// (the caller offers to merge); Ok(sessions changed) otherwise.
+    pub fn rename_tag(&mut self, id: &Id, name: &str) -> Result<usize, Id> {
+        let name = clean_tag(name);
+        let Some(mut t) = self.db.tags.get(id).cloned().filter(|t| !t.deleted) else { return Ok(0) };
+        if name.is_empty() || name == t.name {
+            return Ok(0);
+        }
+        if let Some(other) = self.db.tag_named(&name).filter(|o| &o.id != id) {
+            return Err(other.id.clone());
+        }
+        let old = std::mem::replace(&mut t.name, name.clone());
+        let n = self.retag_sessions(&old, Some(&name));
+        self.put_tag_quiet(t);
+        self.changed();
+        Ok(n)
+    }
+
+    /// Merge one tag into another: its sessions take the other's name, and it goes.
+    pub fn merge_tags(&mut self, from: &Id, into: &Id) -> usize {
+        let (Some(f), Some(i)) = (self.db.tags.get(from).cloned(), self.db.tags.get(into).cloned()) else { return 0 };
+        if from == into {
+            return 0;
+        }
+        let n = self.retag_sessions(&f.name, Some(&i.name));
+        self.put_tag_quiet(Tag { deleted: true, ..f });
+        self.changed();
+        n
+    }
+
+    /// Delete a tag: it leaves every session (the sessions stay). Returns how many changed.
+    pub fn delete_tag(&mut self, id: &Id) -> usize {
+        let Some(t) = self.db.tags.get(id).cloned() else { return 0 };
+        let before: Vec<TimeEntry> = self.db.live_entries().filter(|e| e.tags.iter().any(|x| x.eq_ignore_ascii_case(&t.name))).cloned().collect();
+        self.last_tag_removed = Some((t.clone(), before));
+        self.last_removed = None;
+        self.last_retagged = None;
+        let n = self.retag_sessions(&t.name, None);
+        self.put_tag_quiet(Tag { deleted: true, ..t });
+        self.changed();
+        n
+    }
+
+    /// Add a tag to several sessions, or take one off them, in one save. Sessions in a locked
+    /// period and those already as asked are left alone. Returns (changed, locked skipped);
+    /// Undo puts the changed sessions' tags back.
+    pub fn tag_entries(&mut self, ids: &[Id], add: Option<&str>, remove: Option<&str>) -> (usize, usize) {
+        let add = add.map(clean_tag).filter(|t| !t.is_empty());
+        let remove = remove.map(clean_tag).filter(|t| !t.is_empty());
+        if self.blocked.is_some() || (add.is_none() && remove.is_none()) {
+            return (0, 0);
+        }
+        // a new name joins the list first, so every session gets the list's spelling
+        let add = add.map(|n| match self.db.tag_named(&n) {
+            Some(t) => t.name.clone(),
+            None => {
+                let t = self.new_tag_record(&n);
+                self.put_tag_quiet(t);
+                n
+            }
+        });
+        let (mut before, mut skipped) = (vec![], 0);
+        for id in ids {
+            let Some(e) = self.db.entries.get(id).filter(|e| !e.deleted).cloned() else { continue };
+            if crate::report::locked(&self.db, e.start) {
+                skipped += 1;
+                continue;
+            }
+            let mut tags = e.tags.clone();
+            if let Some(r) = &remove {
+                tags.retain(|t| !clean_tag(t).eq_ignore_ascii_case(r));
+            }
+            if let Some(a) = &add {
+                if !tags.iter().any(|t| clean_tag(t).eq_ignore_ascii_case(a)) {
+                    tags.push(a.clone());
+                }
+            }
+            if tags == e.tags {
+                continue;
+            }
+            before.push(e.clone());
+            let mut x = TimeEntry { tags, ..e };
+            x.rev = self.tick();
+            self.db.entries.insert(x.id.clone(), x);
+        }
+        let n = before.len();
+        if n > 0 {
+            self.last_retagged = Some(before);
+            self.last_tag_removed = None;
+            self.last_removed = None;
+        }
+        self.changed();
+        (n, skipped)
+    }
+
     pub fn put_project(&mut self, mut p: Project) {
         p.rev = self.tick();
         self.db.projects.insert(p.id.clone(), p);
@@ -466,6 +659,26 @@ impl Store {
         self.changed();
     }
     pub fn put_entry(&mut self, mut e: TimeEntry) {
+        // its tags are in the list, spelled as the list spells them, each once
+        let mut tags: Vec<String> = vec![];
+        for t in &e.tags {
+            let c = clean_tag(t);
+            if c.is_empty() {
+                continue;
+            }
+            let name = match self.db.tag_named(&c) {
+                Some(x) => x.name.clone(),
+                None => {
+                    let x = self.new_tag_record(&c);
+                    self.put_tag_quiet(x);
+                    c
+                }
+            };
+            if !tags.iter().any(|x| x.eq_ignore_ascii_case(&name)) {
+                tags.push(name);
+            }
+        }
+        e.tags = tags;
         e.rev = self.tick();
         self.db.entries.insert(e.id.clone(), e);
         self.changed();
@@ -493,6 +706,8 @@ impl Store {
 
     pub fn delete_entry(&mut self, id: &str) {
         if let Some(mut e) = self.db.entries.get(id).cloned() {
+            self.last_tag_removed = None;
+            self.last_retagged = None;
             self.last_removed = Some(e.clone());
             e.deleted = true;
             self.put_entry(e);
@@ -500,6 +715,31 @@ impl Store {
     }
     /// Bring back the last deleted or discarded entry.
     pub fn undo_remove(&mut self) -> bool {
+        // tags added to or taken off several sessions: only the tags go back
+        if let Some(es) = self.last_retagged.take() {
+            for was in es {
+                let Some(now) = self.db.entries.get(&was.id).cloned() else { continue };
+                let mut e = TimeEntry { tags: was.tags, ..now };
+                e.rev = self.tick();
+                self.db.entries.insert(e.id.clone(), e);
+            }
+            self.changed();
+            return true;
+        }
+        // a deleted tag comes back on the sessions it was on
+        if let Some((t, es)) = self.last_tag_removed.take() {
+            self.put_tag_quiet(Tag { deleted: false, ..t });
+            for mut e in es {
+                if let Some(now) = self.db.entries.get(&e.id) {
+                    // only the tags go back: anything else changed since stays
+                    e = TimeEntry { tags: e.tags.clone(), ..now.clone() };
+                }
+                e.rev = self.tick();
+                self.db.entries.insert(e.id.clone(), e);
+            }
+            self.changed();
+            return true;
+        }
         if let Some(mut e) = self.last_removed.take() {
             if e.stop.is_none() {
                 // it was running: it keeps running only if nothing else runs now
@@ -916,5 +1156,95 @@ mod tests {
         let start = s.db.entries[&id].start;
         let stopped = s.stop_idle(start);
         assert!(stopped.is_none() && s.db.running().is_none(), "idle from the very start discards it");
+    }
+
+    fn tagged(store: &mut Store, id: &str, start: i64, tags: &[&str]) {
+        store.db.entries.insert(id.into(), TimeEntry { id: id.into(), start, stop: Some(start + 600), tags: tags.iter().map(|t| t.to_string()).collect(), ..Default::default() });
+    }
+
+    #[test]
+    fn tags_written_by_hand_become_one_list_without_duplicates() {
+        let mut s = Store::in_memory(Db::default());
+        tagged(&mut s, "a", 100, &["Meeting", " urgent "]);
+        tagged(&mut s, "b", 200, &["meeting", "#Urgent"]);
+        assert_eq!(s.ensure_tags(), 2);
+        let names: Vec<String> = s.db.live_tags().iter().map(|t| t.name.clone()).collect();
+        assert_eq!(names, vec!["Meeting", "urgent"], "the first spelling met wins; case and # don't make a new tag");
+        assert_eq!(s.ensure_tags(), 0, "repeatable");
+        assert_eq!(s.db.tags.get("tag:meeting").map(|t| t.name.as_str()), Some("Meeting"), "a stable id, the same on every device");
+    }
+
+    #[test]
+    fn a_saved_session_uses_the_list_spelling_and_adds_new_tags() {
+        let mut s = Store::in_memory(Db::default());
+        assert_eq!(s.create_tag("  Support ").as_deref(), Some("Support"));
+        assert_eq!(s.create_tag("support").as_deref(), Some("Support"), "no second tag for another case");
+        assert_eq!(s.create_tag("#").as_deref(), None);
+        s.put_entry(TimeEntry { id: "e".into(), start: 0, stop: Some(60), tags: vec!["SUPPORT".into(), "review".into(), "support".into()], ..Default::default() });
+        assert_eq!(s.db.entries["e"].tags, vec!["Support", "review"]);
+        assert!(s.db.tag_named("Review").is_some(), "a new name joins the list");
+    }
+
+    #[test]
+    fn renaming_merging_and_deleting_a_tag_rewrite_its_sessions() {
+        let mut s = Store::in_memory(Db::default());
+        tagged(&mut s, "a", 100, &["meeting", "client"]);
+        tagged(&mut s, "b", 200, &["call"]);
+        tagged(&mut s, "c", 300, &["call", "meeting"]);
+        s.ensure_tags();
+        let id = |s: &Store, n: &str| s.db.tag_named(n).unwrap().id.clone();
+        // rename
+        let m = id(&s, "meeting");
+        assert_eq!(s.rename_tag(&m, "Riunione"), Ok(2));
+        assert_eq!(s.db.entries["a"].tags, vec!["Riunione", "client"]);
+        assert!(s.db.tag_named("meeting").is_none());
+        // a name another tag has: the caller is told which, to offer a merge
+        let call = id(&s, "call");
+        assert_eq!(s.rename_tag(&call, "riunione"), Err(m.clone()));
+        // merge: one tag per session, the other tag goes
+        assert_eq!(s.merge_tags(&call, &m), 2);
+        assert_eq!(s.db.entries["b"].tags, vec!["Riunione"]);
+        assert_eq!(s.db.entries["c"].tags, vec!["Riunione"], "no repeat when a session had both");
+        assert!(s.db.tag_named("call").is_none());
+        // a name used again after a merge gets a tag of its own
+        assert_eq!(s.create_tag("call").as_deref(), Some("call"));
+        // delete: the sessions stay, without it; Undo puts it back on them
+        assert_eq!(s.delete_tag(&m), 3);
+        assert!(s.db.entries.values().all(|e| !e.tags.iter().any(|t| t == "Riunione")));
+        assert_eq!(s.db.entries.len(), 3);
+        assert!(s.db.tag_named("Riunione").is_none());
+        assert!(s.undo_remove());
+        assert!(s.db.tag_named("Riunione").is_some());
+        assert_eq!(s.db.entries["a"].tags, vec!["Riunione", "client"]);
+    }
+
+    #[test]
+    fn a_tag_goes_on_and_off_several_sessions_at_once_and_undo_puts_them_back() {
+        let now = now_secs();
+        let mut s = Store::in_memory(crate::sample::build_state(now, crate::sample::DemoState::Varied, false));
+        let mut ids: Vec<Id> = s.db.live_entries().filter(|e| e.stop.is_some()).map(|e| e.id.clone()).collect();
+        ids.sort();
+        let ids: Vec<Id> = ids.into_iter().take(6).collect();
+        let before: Vec<Vec<String>> = ids.iter().map(|id| s.db.entries[id].tags.clone()).collect();
+        // a new name joins the list, with the list's spelling on every session
+        let (n, skipped) = s.tag_entries(&ids, Some("#Da fatturare"), None);
+        assert_eq!((n, skipped), (6, 0));
+        assert!(s.db.tag_named("da fatturare").is_some());
+        assert!(ids.iter().all(|id| s.db.entries[id].tags.iter().filter(|t| *t == "Da fatturare").count() == 1));
+        // again: nothing changes, and Undo still undoes the first
+        assert_eq!(s.tag_entries(&ids, Some("da fatturare"), None).0, 0);
+        assert!(s.undo_remove());
+        let after: Vec<Vec<String>> = ids.iter().map(|id| s.db.entries[id].tags.clone()).collect();
+        assert_eq!(after, before);
+        // taking one off, any capitals
+        s.tag_entries(&ids, Some("urgente"), None);
+        let (n, _) = s.tag_entries(&ids, None, Some("URGENTE"));
+        assert_eq!(n, 6);
+        assert!(ids.iter().all(|id| !s.db.entries[id].tags.iter().any(|t| t.eq_ignore_ascii_case("urgente"))));
+        // a locked period is left alone
+        let first = s.db.entries[&ids[0]].start;
+        s.db.settings.lock_until = Some(crate::report::local_date(first).format("%Y-%m-%d").to_string());
+        let (_, skipped) = s.tag_entries(&ids[..1], Some("nuovo"), None);
+        assert_eq!(skipped, 1);
     }
 }
