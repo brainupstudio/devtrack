@@ -1,3 +1,47 @@
+## DevTrack 0.1.18
+
+### Novità
+- **Tag in un elenco unico:** i tag sono un solo elenco, sincronizzato tra i tuoi dispositivi, senza doppioni per maiuscole o minuscole. I tag che avevi scritto a mano entrano nell'elenco da soli. In Lavoro › Tag puoi rinominarli, unirli ed eliminarli; le sessioni si aggiornano, e c'è Annulla.
+- **Scegliere i tag:** nel timer (link Tag, oppure scrivendo `#parola` in fondo all'attività), nella modifica di una sessione, in Aggiungi sessione e nella finestra compatta c'è un menu con ricerca e caselle, da cui puoi anche creare un tag nuovo. La ricerca trova anche le varianti scritte in modo diverso ("code-review" trova "Code review") e non propone di crearne una copia.
+- **Filtrare per tag:** in Oggi fai clic su un `#tag` di una sessione, oppure scegli il tag dal menu a destra del totale: totale, barra dei progetti ed elenco mostrano solo quelle sessioni, e nel calendario le altre restano visibili ma attenuate. Il filtro c'è anche nelle Statistiche (con "Senza tag" e una sezione Tag su cui puoi cliccare) e in Lavoro › Attività.
+- **Tag su più sessioni insieme:** in Oggi spunta le sessioni (la casella al posto del pallino, Seleziona nel menu ··· della riga, Spazio o ⌘-clic) e usa Aggiungi tag o Togli tag nella barra che compare in cima all'elenco. Le sessioni di un periodo bloccato restano com'erano; c'è Annulla.
+- **Tag detti una volta:** su un'attività, su un valore della Rendicontazione e su un gruppo di Per attività i tag compaiono una volta sola; sulle singole sessioni restano solo quelli che le distinguono. Passando sopra "+N" vedi tutti i tag.
+- **Per attività più chiaro:** aprendo un gruppo, le sue sessioni sono rientrate e unite al gruppo da una linea, con la propria nota, i tag e gli orari. Il gruppo dice quante sessioni contiene, invece di un orario dalla prima all'ultima che sembrava un blocco unico.
+- **Assistenti AI:** possono elencare i tag, filtrare le sessioni senza tag e preparare un report per tag.
+- **Finestra compatta:** a timer fermo ha la stessa forma di quando è in corso, con progetto, cliente e Tag come link; una nuova vista Calendario mostra un giorno alla volta; le righe mostrano anche cliente e tag e hanno il pulsante delle conversioni ⇄.
+- **Calendario:** i blocchi si allungano trascinando sia il bordo superiore sia quello inferiore.
+
+### Correzioni
+- **Minuti interi:** quando cambi l'orario di una sessione (frecce, testo, durata o trascinamento) inizio e fine perdono i secondi, così la durata è tonda.
+- Il pulsante di copia della giornata è stato tolto.
+- I suggerimenti al passaggio del mouse vanno a capo dentro la finestra, anche nella compatta.
+- In Statistiche "No project" ora è "Nessun progetto".
+
+### Download
+| Sistema | File |
+|---|---|
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.18-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.18-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.18-Linux-x64.tar.gz` |
+
+### Aggiornare
+Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
+
+### Installare dal Terminale, senza avvisi
+Un comando scarica l'ultima versione, controlla che sia quella pubblicata e la installa; serve anche per aggiornare. Il sistema non mostra l'avviso sulle app non firmate.
+- **macOS e Linux**, nel Terminale: `curl -fsSL https://brainupstudio.github.io/devtrack.site/install.sh | sh`
+- **Windows**, in PowerShell: `irm https://brainupstudio.github.io/devtrack.site/install.ps1 | iex`
+
+### Primo avvio dal file scaricato
+Questa versione non è ancora firmata dagli editori dei sistemi operativi, quindi scaricata dal browser mostra un avviso la prima volta.
+- **macOS:** apri il DMG e trascina DevTrack in Applicazioni (sostituisci quella che c'è). Al primo avvio macOS dice che non può verificarla: premi Fine, apri Impostazioni di Sistema › Privacy e sicurezza e, in fondo, premi "Apri comunque". Serve una volta sola.
+- **Windows:** estrai lo zip e avvia `DevTrack.exe`. Se compare "Windows ha protetto il PC", scegli "Ulteriori informazioni" › "Esegui comunque".
+- **Linux:** estrai l'archivio ed esegui `./install.sh` per aggiungere DevTrack al menu delle applicazioni, oppure avvia direttamente `./devtrack`.
+
+### Limiti noti
+- L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
+- Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
 ## DevTrack 0.1.17
 
 ### Novità
