@@ -89,11 +89,13 @@ pub struct TodayState {
     pub run_time_request: bool,
     /// Review pictures: open the conversions of the first row.
     pub conv_request: bool,
+    /// Task groups of the list showing their sessions (day and group key).
+    pub open_groups: std::collections::HashSet<Id>,
 }
 
 impl TodayState {
     pub fn new(period: Period) -> Self {
-        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false }
+        TodayState { draft: Draft::default(), past: Past::default(), past_open: false, past_focused: false, period, timeline: false, timesheet: false, sheet_rows: vec![], sheet_focus: None, preview_task_menu: false, only_incomplete: false, edit: None, edit_anchor: None, run_desc: None, highlight: None, run_time: None, run_time_request: false, conv_request: false, focus_desc: false, views_in_summary: false, open_groups: Default::default() }
     }
 }
 
@@ -321,24 +323,27 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     favorites_row(app, ui);
     ui.add_space(24.0 - ui.spacing().item_spacing.y);
 
-    // the period toolbar: fixed positions; count and List/Timeline in its reserved status slot
+    // the period toolbar says which time is shown, and nothing else: how to look at it (the
+    // views) sits with the total, just above what it changes
     let monday = app.store.db.settings.week_starts_monday;
     let mut per = period;
-    // three ways to see the same sessions: list, calendar, weekly grid
-    let mut view = if app.today.timesheet { 2 } else if app.today.timeline { 1 } else { 0 };
-    // List · Calendar · Timesheet say how the sessions below are shown: right of the period bar
-    // when it fits, otherwise right on the summary row, just above what they change
-    let views_w = segmented_w(ui, &VIEWS);
+    // the views, as icons, in the bar's free slot on the right; on the summary row when it has none
+    let views_w = segmented_icons_w(VIEWS.len());
     let views_here = super::period::status_fits(ui, views_w);
     app.today.views_in_summary = !views_here;
+    let mut picked = None;
+    let current = view_index(app);
     let bar = super::period::period_toolbar(ui, &mut per, monday, [true, true, true], if views_here { views_w } else { 0.0 }, |ui| {
-        if let Some(i) = segmented(ui, &VIEWS, view) {
-            view = i;
-        }
+        picked = segmented_icons(ui, &VIEWS, current);
     });
     super::period::record(app, "today", &bar);
-    app.today.timeline = view == 1;
-    app.today.timesheet = view == 2;
+    if let Some(i) = picked {
+        set_view(app, i);
+        if app.today.timesheet && per.kind != PeriodKind::Week {
+            per = Period::containing(PeriodKind::Week, per.start, monday);
+        }
+        ui.ctx().request_repaint();
+    }
     // the grid is a week: choosing it, or being on it, keeps the period a week
     if app.today.timesheet && per.kind != PeriodKind::Week {
         per = Period::containing(PeriodKind::Week, per.start, monday);
@@ -494,7 +499,22 @@ fn session_panel(app: &mut App, ui: &mut egui::Ui) {
 }
 
 // The description is a normal 36 control: the panel is one compact row when there is room.
-const VIEWS: [&str; 3] = ["List", "Timeline", "Timesheet"];
+/// Four ways to see the same sessions: every session, one line per task and day, the calendar,
+/// the weekly grid. Icons, named in their tooltips: the switch stays narrow.
+const VIEWS: [(Glyph, &str); 4] = [(Glyph::List, "List"), (Glyph::Group, "By task"), (Glyph::Calendar, "Timeline"), (Glyph::Grid, "Timesheet")];
+
+fn view_index(app: &App) -> usize {
+    if app.today.timesheet { 3 } else if app.today.timeline { 2 } else if app.store.local.list_by_task { 1 } else { 0 }
+}
+
+fn set_view(app: &mut App, i: usize) {
+    app.today.timeline = i == 2;
+    app.today.timesheet = i == 3;
+    if i <= 1 && app.store.local.list_by_task != (i == 1) {
+        app.store.local.list_by_task = i == 1;
+        app.store.save_local();
+    }
+}
 const DESC_H: f32 = CTRL_H;
 
 /// What a description suggestion fills in.
@@ -1055,94 +1075,96 @@ fn ledger_summary(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], perio
     let tracked: i64 = entries.iter().map(|e| report::overlap(e, pa, pb, now)).sum();
     // the count and the total cover the same sessions, the running one included
     let done = entries.len() as i64;
-    if app.today.timeline && period.kind == PeriodKind::Month {
-        meta(ui, "The timeline shows a day or a week; a month is shown as a list.");
-    }
-    // nothing recorded: the empty state below says it, so no "0 sessions · 0 s" line; the
-    // views, when they live here, still get their row
-    if done == 0 && !app.today.only_incomplete {
-        if app.today.views_in_summary {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| summary_views(app, ui));
-        }
-        return;
-    }
-    // The total on the left, its label on the same baseline; the status of the sessions on the
-    // right, as the same box Report Time uses (a button when there is something to do).
-    let total = ui.painter().layout_job(mixed_job(&words(tracked), 20.0, c.text, medium(20.0), mono_medium(20.0)));
-    let rest = ui.painter().layout_job(mixed_job(&trf_m!("tracked · {}", plural(done, "{} session", "{} sessions")), 14.0, c.text2, sans(14.0), mono_font(14.0)));
-    let baseline = |g: &egui::Galley| g.rows.first().and_then(|r| r.glyphs.first()).map(|gl| gl.pos.y).unwrap_or(g.size().y);
-    let (b1, b2) = (baseline(&total), baseline(&rest));
-    let left_w = total.size().x + 8.0 + rest.size().x;
     let running = entries.iter().any(|e| e.is_running());
     let n = incomplete.len() as i64;
     // every session completed while only those were shown: back to the whole list
     if n == 0 && app.today.only_incomplete {
         app.today.only_incomplete = false;
     }
-    // what the box says and what its click does: (text, colour, action)
-    let (text, color, action): (String, Color32, Option<(&str, Glyph)>) = if app.today.only_incomplete && !app.today.timeline {
-        (format!("! {}", plural(n, "Showing {} session that needs details", "Showing {} sessions that need details")), c.amber, Some(("Show all sessions", Glyph::Close)))
-    } else if n > 0 {
-        (format!("! {}", plural(n, "{} session needs details", "{} sessions need details")), c.amber, if app.today.timeline { None } else { Some(("Show only these", Glyph::Next)) })
-    } else if running {
-        ("● A session is still running".to_string(), c.text2, None)
-    } else {
-        ("✔ All sessions completed".to_string(), c.green, None)
-    };
-    let chip_w = status_chip_w(ui, &text, action.is_some());
-    // with the views here: total · status on the left, views on the right
-    let views = app.today.views_in_summary;
-    let views_w = if views { segmented_w(ui, &VIEWS) } else { 0.0 };
+    // One row: what happened on the left (total, count, and the state of the sessions as words,
+    // a button only when there is something to do), how to look at it on the right (the views).
+    // A narrow window puts the views on their own row under it.
+    let views_w = if app.today.views_in_summary { segmented_icons_w(VIEWS.len()) } else { 0.0 };
     let w = ui.available_width();
-    let (chip_beside, views_beside) = if views {
-        let all = left_w + GROUP_GAP + chip_w + GROUP_GAP + views_w <= w;
-        (all, all || left_w + GROUP_GAP + views_w <= w)
+    let total = ui.painter().layout_job(mixed_job(&words(tracked), 20.0, c.text, medium(20.0), mono_medium(20.0)));
+    let rest = ui.painter().layout_job(mixed_job(&trf_m!("tracked · {}", plural(done, "{} session", "{} sessions")), 14.0, c.text2, sans(14.0), mono_font(14.0)));
+    // the state: (words, colour, an action when there is something to do)
+    let state: Option<(String, Color32, Option<(&str, Glyph)>)> = if done == 0 && !app.today.only_incomplete {
+        None
+    } else if app.today.only_incomplete && !app.today.timeline {
+        Some((format!("! {}", plural(n, "Showing {} session that needs details", "Showing {} sessions that need details")), c.amber, Some(("Show all sessions", Glyph::Close))))
+    } else if n > 0 {
+        Some((format!("! {}", plural(n, "{} session needs details", "{} sessions need details")), c.amber, if app.today.timeline { None } else { Some(("Show only these", Glyph::Next)) }))
+    } else if running {
+        Some(("● A session is still running".to_string(), c.text2, None))
     } else {
-        (left_w + GROUP_GAP + chip_w <= w, false)
+        Some(("✔ All sessions completed".to_string(), c.green, None))
     };
+    let state_w = match &state {
+        Some((t, _, Some(_))) => status_chip_w(ui, t, true) + GROUP_GAP,
+        Some((t, _, None)) => ui.painter().layout_no_wrap(tr(t), sans(14.0), c.text).size().x + GROUP_GAP,
+        None => 0.0,
+    };
+    let counts_w = if done == 0 && !app.today.only_incomplete { 0.0 } else { total.size().x + 8.0 + rest.size().x };
+    let views_beside = counts_w + state_w + GROUP_GAP + views_w <= w;
+    let state_beside = counts_w + state_w <= w;
+    let baseline = |g: &egui::Galley| g.rows.first().and_then(|r| r.glyphs.first()).map(|gl| gl.pos.y).unwrap_or(g.size().y);
+    let (b1, b2) = (baseline(&total), baseline(&rest));
     let mut clicked = false;
+    let show_counts = counts_w > 0.0;
     ui.horizontal(|ui| {
         ui.set_min_height(CTRL_H);
-        let h = total.size().y.max(b1 + rest.size().y - b2);
-        let (r, _) = ui.allocate_exact_size(egui::vec2(left_w, h), Sense::hover());
-        let top = r.top();
-        ui.painter().galley(egui::pos2(r.left(), top), total, c.text);
-        ui.painter().galley(egui::pos2(r.left() + left_w - rest.size().x, top + b1 - b2), rest, c.text2);
-        if views && views_beside {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                summary_views(app, ui);
-                if chip_beside {
-                    ui.add_space(GROUP_GAP - ui.spacing().item_spacing.x);
-                    clicked = status_chip_glyph(ui, &text, color, action).clicked();
-                }
-            });
-        } else if !views && chip_beside {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                clicked = status_chip_glyph(ui, &text, color, action).clicked();
-            });
+        if show_counts {
+            let h = total.size().y.max(b1 + rest.size().y - b2);
+            let (r, _) = ui.allocate_exact_size(egui::vec2(counts_w, h), Sense::hover());
+            ui.painter().galley(egui::pos2(r.left(), r.top()), total.clone(), c.text);
+            ui.painter().galley(egui::pos2(r.right() - rest.size().x, r.top() + b1 - b2), rest.clone(), c.text2);
+        }
+        if let (Some((text, color, action)), true) = (&state, state_beside) {
+            ui.add_space(GROUP_GAP - ui.spacing().item_spacing.x);
+            clicked = state_line(ui, text, *color, *action);
+        }
+        if views_beside && app.today.views_in_summary {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| summary_views(app, ui));
         }
     });
-    if views && !views_beside {
+    if let (Some((text, color, action)), false) = (&state, state_beside) {
         ui.add_space(ROW_GAP);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| summary_views(app, ui));
+        clicked = state_line(ui, text, *color, *action);
     }
-    if !chip_beside {
+    if !views_beside && app.today.views_in_summary {
         ui.add_space(ROW_GAP);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            clicked = status_chip_glyph(ui, &text, color, action).clicked();
-        });
+        ui.horizontal(|ui| summary_views(app, ui));
+    }
+    if app.today.timeline && period.kind == PeriodKind::Month {
+        ui.add_space(ROW_GAP);
+        meta(ui, "The timeline shows a day or a week; a month is shown as a list.");
     }
     if clicked {
         app.today.only_incomplete = !app.today.only_incomplete;
     }
 }
 
-/// List · Calendar · Timesheet on the summary row, when the period bar has no room for them.
+/// The state of the period's sessions beside the total: plain words when there is nothing to do
+/// ("✔ All sessions completed"), the status button when there is. Returns its click.
+fn state_line(ui: &mut egui::Ui, text: &str, color: Color32, action: Option<(&str, Glyph)>) -> bool {
+    match action {
+        Some(_) => status_chip_glyph(ui, text, color, action).clicked(),
+        None => {
+            ui.label(RichText::new(tr(text)).font(sans(14.0)).color(color));
+            false
+        }
+    }
+}
+
+/// List · By task · Calendar · Timesheet on the summary row, when the period bar has no room.
 fn summary_views(app: &mut App, ui: &mut egui::Ui) {
-    let view = if app.today.timesheet { 2 } else if app.today.timeline { 1 } else { 0 };
-    if let Some(i) = segmented(ui, &VIEWS, view) {
-        app.today.timeline = i == 1;
-        app.today.timesheet = i == 2;
+    if let Some(i) = segmented_icons(ui, &VIEWS, view_index(app)) {
+        set_view(app, i);
+        // the grid is a week: choosing it keeps the period a week
+        if app.today.timesheet && app.today.period.kind != PeriodKind::Week {
+            app.today.period = Period::containing(PeriodKind::Week, app.today.period.start, app.store.db.settings.week_starts_monday);
+        }
         ui.ctx().request_repaint();
     }
 }
@@ -1283,9 +1305,164 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
     ui.painter().text(egui::pos2(hr.left() + x_time + time_span, hr.center().y), egui::Align2::LEFT_CENTER, tr("Duration"), sans(12.0), c.text2);
     let mut action: Option<(u8, TimeEntry)> = None;
     let mut copied: Option<String> = None;
-    let multi_day = by_day.len() > 1;
+    // grouped by task, every day gets its band: it carries the copy of the day's totals
+    let by_task = app.store.local.list_by_task;
+    let multi_day = by_day.len() > 1 || by_task;
+    let mut day_copy: Option<String> = None;
     // rows are exactly 64 high: no extra spacing between a row and its divider
     ui.spacing_mut().item_spacing.y = 0.0;
+    // one session's row (also a group's sessions when it is open)
+    let draw_session = |app: &mut App, ui: &mut egui::Ui, e: &TimeEntry, a: &i64, b: &i64, action: &mut Option<(u8, TimeEntry)>, copied: &mut Option<String>| {
+        let mut action_rect = egui::Rect::NOTHING;
+        let mut buttons_left = 0.0_f32;
+        let row = ui.horizontal(|ui| {
+            ui.set_min_height(64.0);
+            ui.add_space(14.0);
+            col(ui, main_w, 60.0, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    match app.store.db.project(&e.project_id).map(|p| hex(&p.color)) {
+                        Some(col_) => dot(ui, col_, 3.5),
+                        None => {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 9.0), Sense::hover());
+                            ui.painter().circle_stroke(r.center(), 3.5, Stroke::new(1.2, c.amber));
+                        }
+                    }
+                    let title_txt = super::session_title(&app.store.db, e);
+                    ui.add(egui::Label::new(RichText::new(title_txt).font(medium(14.0))).truncate());
+                });
+                let observations = session_observations(&e.id, &fl);
+                let miss = missing_text(e);
+                let context = if !miss.is_empty() {
+                    tr(miss)
+                } else {
+                    let mut parts = vec![super::session_context(&app.store.db, e)];
+                    parts.retain(|p| !p.is_empty());
+                    if !e.tags.is_empty() { parts.push(e.tags.iter().map(|t| format!("#{}", t)).collect::<Vec<_>>().join(" ")); }
+                    parts.join(" · ")
+                };
+                let summary = if observations.is_empty() { context.clone() } else {
+                    let count = if observations.len() == 1 { observations[0].clone() } else { plural(observations.len() as i64, "{} observation", "{} observations") };
+                    if context.is_empty() { count } else { format!("{} · {}", context, count) }
+                };
+                let full = std::iter::once(context).chain(observations.iter().cloned()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+                // One bounded metadata line: arbitrary warning counts never grow this cell.
+                let rect = ui.available_rect_before_wrap();
+                ui.set_clip_rect(ui.clip_rect().intersect(egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() - 64.0), egui::pos2(rect.left() + main_w, rect.bottom()))));
+                // The whole row opens the editor (with the checks), so no separate Review link.
+                ui.allocate_ui_with_layout(egui::vec2(main_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_width(main_w);
+                    ui.add(egui::Label::new(RichText::new(summary).size(12.0).color(if miss.is_empty() { c.text2 } else { c.amber })).truncate()).on_hover_text(full);
+                });
+            });
+            let (from, to) = piece_times(e, *a, *b, h24);
+            let note = if *a > e.start { "from the day before" } else if Some(*b) != e.stop { "continues next day" } else { "" };
+            if time_w > 0.0 {
+                col(ui, time_w, 60.0, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    // one line sits on the row's middle; with a note it takes the two-line rhythm
+                    ui.add_space(if note.is_empty() { 21.0 } else { 12.0 });
+                    ui.label(range_job(&from, &to, 13.0, c.text2));
+                    if !note.is_empty() {
+                        meta(ui, note);
+                    }
+                });
+            }
+            col(ui, dur_w, 60.0, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                let part = time_w > 0.0 && b - a != e.duration(now);
+                ui.add_space(if time_w == 0.0 || part { 12.0 } else { 21.0 });
+                ui.label(mono_m(super::shown_duration(&app.store.db, b - a), 14.0));
+                if time_w == 0.0 {
+                    ui.label(range_job(&from, &to, 12.0, c.text2));
+                } else if part {
+                    mixed(ui, &trf_m!("of {}", format_duration(e.duration(now), fmt)), 12.0, Some(c.text2));
+                }
+            });
+            ui.add_space(4.0);
+            let (conv, resume, more) = ui.vertical(|ui| {
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let conv = has_conv.then(|| icon_ghost_quiet(ui, Glyph::Convert, "Conversions"));
+                    let resume = play_btn.then(|| icon_ghost(ui, Glyph::Play, "Continue now"));
+                    (conv, resume, icon_button(ui, Glyph::More, "Session actions"))
+                }).inner
+            }).inner;
+            // the row's own click area stops before the first button, or it would take their hover
+            buttons_left = conv.as_ref().or(resume.as_ref()).map(|r| r.rect.left()).unwrap_or(more.rect.left());
+            if let Some(conv) = conv {
+                let cid = ui.make_persistent_id(("row-conv", &e.id, *a));
+                if conv.clicked() || std::mem::take(&mut app.today.conv_request) {
+                    ui.memory_mut(|m| m.toggle_popup(cid));
+                }
+                let open = ui.memory(|m| m.is_popup_open(cid));
+                egui::popup_below_widget(ui, cid, &conv, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                    if let Some(v) = conversions_card(ui, &profiles, b - a, true) {
+                        *copied = Some(v);
+                        ui.memory_mut(|m| m.close_popup());
+                    }
+                });
+                if !open {
+                    conv.on_hover_ui(|ui| {
+                        conversions_card(ui, &profiles, b - a, false);
+                    });
+                }
+            }
+            if resume.is_some_and(|r| r.clicked()) {
+                *action = Some((0, e.clone()));
+            }
+            action_rect = more.rect;
+            app.geometry.rows.push((format!("ledger action · {}", e.id), more.rect));
+            let pid = ui.make_persistent_id(("row-more", &e.id, *a));
+            if more.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(pid));
+            }
+            egui::popup_below_widget(ui, pid, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                ui.set_min_width(180.0);
+                if menu_row(ui, "Continue now", false, false).clicked() {
+                    *action = Some((0, e.clone()));
+                }
+                if menu_row(ui, "Edit…", false, false).clicked() {
+                    *action = Some((1, e.clone()));
+                }
+                // the task's own page: source data (Azure DevOps) and every session on it
+                if app.store.db.task(&e.task_id).is_some() && menu_row(ui, "Open task", false, false).clicked() {
+                    *action = Some((3, e.clone()));
+                }
+                if menu_row(ui, "Duplicate", false, false).on_hover_text(tr("A copy with the same times, opened for editing")).clicked() {
+                    *action = Some((4, e.clone()));
+                }
+                if e.duration(now) >= 120 && menu_row(ui, "Split in two", false, false).on_hover_text(tr("Two sessions meeting at the midpoint; adjust the time afterwards")).clicked() {
+                    *action = Some((5, e.clone()));
+                }
+                let fav = favorite_of(e);
+                let is_fav = app.store.local.favorites.contains(&fav);
+                if menu_row(ui, if is_fav { "Remove from favorites" } else { "Add to favorites" }, false, false).clicked() {
+                    *action = Some((6, e.clone()));
+                }
+                if menu_row(ui, "Delete", false, false).clicked() {
+                    *action = Some((2, e.clone()));
+                }
+            });
+        });
+        if app.today.highlight.as_deref() == Some(e.id.as_str()) {
+            let r = row.response.rect.expand2(egui::vec2(0.0, 0.0));
+            ui.painter().rect_filled(egui::Rect::from_min_max(r.min, egui::pos2(r.left() + 3.0, r.max.y)), 1.5, c.focus);
+        }
+        app.geometry.rows.push((format!("ledger row · {}", e.id), row.response.rect));
+        let click_rect = egui::Rect::from_min_max(row.response.rect.min, egui::pos2(buttons_left - 4.0, row.response.rect.bottom()));
+        let resp = ui.interact(click_rect, egui::Id::new(("row", &e.id, *a)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, super::session_title(&app.store.db, e)));
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            *action = Some((1, e.clone()));
+        }
+        divider(ui);
+    };
     for (date, mut list) in by_day.into_iter().rev() {
         list.sort_by_key(|x| x.1);
         if multi_day {
@@ -1300,160 +1477,53 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
             ui.painter().text(egui::pos2(name.right() + ROW_GAP, dr.center().y), egui::Align2::LEFT_CENTER, super::i18n::short_date(date), mono_font(12.0), c.text2);
             let total: i64 = list.iter().map(|x| x.2 - x.1).sum();
             // under its column; a narrow list has no room there beside the date, so it goes to the right edge
-            let (tx, ta) = if narrow { (dr.right() - 14.0, egui::Align2::RIGHT_CENTER) } else { (dr.left() + x_time + time_span, egui::Align2::LEFT_CENTER) };
+            let copy_room = if by_task { CTRL_H + 4.0 } else { 0.0 };
+            let (tx, ta) = if narrow { (dr.right() - 14.0 - copy_room, egui::Align2::RIGHT_CENTER) } else { (dr.left() + x_time + time_span, egui::Align2::LEFT_CENTER) };
+            if by_task {
+                let br = egui::Rect::from_min_size(egui::pos2(dr.right() - 4.0 - CTRL_H, dr.top()), egui::vec2(CTRL_H, CTRL_H));
+                let mut cu = ui.new_child(egui::UiBuilder::new().max_rect(br));
+                if icon_ghost(&mut cu, Glyph::Copy, "Copy the day's totals per task").clicked() {
+                    let groups = super::by_task::group(&list);
+                    day_copy = Some(super::by_task::day_text(&app.store.db, &groups, &profiles, |e| super::session_title(&app.store.db, e)));
+                }
+            }
             ui.painter().text(egui::pos2(tx, dr.center().y), ta, super::shown_duration(&app.store.db, total), mono_medium(13.0), c.text);
             divider(ui);
         }
+        if by_task {
+            for g in super::by_task::group(&list) {
+                if g.pieces.len() == 1 {
+                    let (e, a, b) = &g.pieces[0];
+                    draw_session(app, ui, e, a, b, &mut action, &mut copied);
+                    continue;
+                }
+                let gid = super::by_task::group_id(date, &g);
+                let open = app.today.open_groups.contains(&gid);
+                let lead = g.latest().clone();
+                let (toggle, resume, conv_copy) = group_row(app, ui, &g, open, &profiles, GroupCols { main_w, time_w, dur_w, has_conv, play_btn }, h24);
+                if let Some(v) = conv_copy {
+                    copied = Some(v);
+                }
+                if resume {
+                    action = Some((0, lead));
+                }
+                if toggle {
+                    if open { app.today.open_groups.remove(&gid); } else { app.today.open_groups.insert(gid.clone()); }
+                }
+                if open {
+                    for (e, a, b) in &g.pieces {
+                        let top = ui.cursor().top();
+                        draw_session(app, ui, e, a, b, &mut action, &mut copied);
+                        // the group's sessions hang from it: a line down their left edge
+                        let x = ui.max_rect().left() + 5.0;
+                        ui.painter().line_segment([egui::pos2(x, top + 10.0), egui::pos2(x, ui.cursor().top() - 10.0)], Stroke::new(2.0, c.border));
+                    }
+                }
+            }
+            continue;
+        }
         for (e, a, b) in &list {
-            let mut action_rect = egui::Rect::NOTHING;
-            let mut buttons_left = 0.0_f32;
-            let row = ui.horizontal(|ui| {
-                ui.set_min_height(64.0);
-                ui.add_space(14.0);
-                col(ui, main_w, 60.0, |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        match app.store.db.project(&e.project_id).map(|p| hex(&p.color)) {
-                            Some(col_) => dot(ui, col_, 3.5),
-                            None => {
-                                let (r, _) = ui.allocate_exact_size(egui::vec2(11.0, 9.0), Sense::hover());
-                                ui.painter().circle_stroke(r.center(), 3.5, Stroke::new(1.2, c.amber));
-                            }
-                        }
-                        let title_txt = super::session_title(&app.store.db, e);
-                        ui.add(egui::Label::new(RichText::new(title_txt).font(medium(14.0))).truncate());
-                    });
-                    let observations = session_observations(&e.id, &fl);
-                    let miss = missing_text(e);
-                    let context = if !miss.is_empty() {
-                        tr(miss)
-                    } else {
-                        let mut parts = vec![super::session_context(&app.store.db, e)];
-                        parts.retain(|p| !p.is_empty());
-                        if !e.tags.is_empty() { parts.push(e.tags.iter().map(|t| format!("#{}", t)).collect::<Vec<_>>().join(" ")); }
-                        parts.join(" · ")
-                    };
-                    let summary = if observations.is_empty() { context.clone() } else {
-                        let count = if observations.len() == 1 { observations[0].clone() } else { plural(observations.len() as i64, "{} observation", "{} observations") };
-                        if context.is_empty() { count } else { format!("{} · {}", context, count) }
-                    };
-                    let full = std::iter::once(context).chain(observations.iter().cloned()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
-                    // One bounded metadata line: arbitrary warning counts never grow this cell.
-                    let rect = ui.available_rect_before_wrap();
-                    ui.set_clip_rect(ui.clip_rect().intersect(egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() - 64.0), egui::pos2(rect.left() + main_w, rect.bottom()))));
-                    // The whole row opens the editor (with the checks), so no separate Review link.
-                    ui.allocate_ui_with_layout(egui::vec2(main_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.set_width(main_w);
-                        ui.add(egui::Label::new(RichText::new(summary).size(12.0).color(if miss.is_empty() { c.text2 } else { c.amber })).truncate()).on_hover_text(full);
-                    });
-                });
-                let (from, to) = piece_times(e, *a, *b, h24);
-                let note = if *a > e.start { "from the day before" } else if Some(*b) != e.stop { "continues next day" } else { "" };
-                if time_w > 0.0 {
-                    col(ui, time_w, 60.0, |ui| {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        // one line sits on the row's middle; with a note it takes the two-line rhythm
-                        ui.add_space(if note.is_empty() { 21.0 } else { 12.0 });
-                        ui.label(range_job(&from, &to, 13.0, c.text2));
-                        if !note.is_empty() {
-                            meta(ui, note);
-                        }
-                    });
-                }
-                col(ui, dur_w, 60.0, |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    let part = time_w > 0.0 && b - a != e.duration(now);
-                    ui.add_space(if time_w == 0.0 || part { 12.0 } else { 21.0 });
-                    ui.label(mono_m(super::shown_duration(&app.store.db, b - a), 14.0));
-                    if time_w == 0.0 {
-                        ui.label(range_job(&from, &to, 12.0, c.text2));
-                    } else if part {
-                        mixed(ui, &trf_m!("of {}", format_duration(e.duration(now), fmt)), 12.0, Some(c.text2));
-                    }
-                });
-                ui.add_space(4.0);
-                let (conv, resume, more) = ui.vertical(|ui| {
-                    ui.add_space(14.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        let conv = has_conv.then(|| icon_ghost_quiet(ui, Glyph::Convert, "Conversions"));
-                        let resume = play_btn.then(|| icon_ghost(ui, Glyph::Play, "Continue now"));
-                        (conv, resume, icon_button(ui, Glyph::More, "Session actions"))
-                    }).inner
-                }).inner;
-                // the row's own click area stops before the first button, or it would take their hover
-                buttons_left = conv.as_ref().or(resume.as_ref()).map(|r| r.rect.left()).unwrap_or(more.rect.left());
-                if let Some(conv) = conv {
-                    let cid = ui.make_persistent_id(("row-conv", &e.id, *a));
-                    if conv.clicked() || std::mem::take(&mut app.today.conv_request) {
-                        ui.memory_mut(|m| m.toggle_popup(cid));
-                    }
-                    let open = ui.memory(|m| m.is_popup_open(cid));
-                    egui::popup_below_widget(ui, cid, &conv, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                        if let Some(v) = conversions_card(ui, &profiles, b - a, true) {
-                            copied = Some(v);
-                            ui.memory_mut(|m| m.close_popup());
-                        }
-                    });
-                    if !open {
-                        conv.on_hover_ui(|ui| {
-                            conversions_card(ui, &profiles, b - a, false);
-                        });
-                    }
-                }
-                if resume.is_some_and(|r| r.clicked()) {
-                    action = Some((0, e.clone()));
-                }
-                action_rect = more.rect;
-                app.geometry.rows.push((format!("ledger action · {}", e.id), more.rect));
-                let pid = ui.make_persistent_id(("row-more", &e.id, *a));
-                if more.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(pid));
-                }
-                egui::popup_below_widget(ui, pid, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-                    ui.set_min_width(180.0);
-                    if menu_row(ui, "Continue now", false, false).clicked() {
-                        action = Some((0, e.clone()));
-                    }
-                    if menu_row(ui, "Edit…", false, false).clicked() {
-                        action = Some((1, e.clone()));
-                    }
-                    // the task's own page: source data (Azure DevOps) and every session on it
-                    if app.store.db.task(&e.task_id).is_some() && menu_row(ui, "Open task", false, false).clicked() {
-                        action = Some((3, e.clone()));
-                    }
-                    if menu_row(ui, "Duplicate", false, false).on_hover_text(tr("A copy with the same times, opened for editing")).clicked() {
-                        action = Some((4, e.clone()));
-                    }
-                    if e.duration(now) >= 120 && menu_row(ui, "Split in two", false, false).on_hover_text(tr("Two sessions meeting at the midpoint; adjust the time afterwards")).clicked() {
-                        action = Some((5, e.clone()));
-                    }
-                    let fav = favorite_of(e);
-                    let is_fav = app.store.local.favorites.contains(&fav);
-                    if menu_row(ui, if is_fav { "Remove from favorites" } else { "Add to favorites" }, false, false).clicked() {
-                        action = Some((6, e.clone()));
-                    }
-                    if menu_row(ui, "Delete", false, false).clicked() {
-                        action = Some((2, e.clone()));
-                    }
-                });
-            });
-            if app.today.highlight.as_deref() == Some(e.id.as_str()) {
-                let r = row.response.rect.expand2(egui::vec2(0.0, 0.0));
-                ui.painter().rect_filled(egui::Rect::from_min_max(r.min, egui::pos2(r.left() + 3.0, r.max.y)), 1.5, c.focus);
-            }
-            app.geometry.rows.push((format!("ledger row · {}", e.id), row.response.rect));
-            let click_rect = egui::Rect::from_min_max(row.response.rect.min, egui::pos2(buttons_left - 4.0, row.response.rect.bottom()));
-            let resp = ui.interact(click_rect, egui::Id::new(("row", &e.id, *a)), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, super::session_title(&app.store.db, e)));
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if resp.clicked() {
-                action = Some((1, e.clone()));
-            }
-            divider(ui);
+            draw_session(app, ui, e, a, b, &mut action, &mut copied);
         }
     }
     if !entries.is_empty() {
@@ -1462,6 +1532,10 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
     if let Some(v) = copied {
         ui.ctx().copy_text(v.clone());
         app.notify(trf_m!("Copied: {}", v));
+    }
+    if let Some(t) = day_copy {
+        ui.ctx().copy_text(t);
+        app.notify(tr("The day's totals per task are copied: paste them into a spreadsheet"));
     }
     if let Some((kind, e)) = action {
         // a locked session can be continued, opened or made a favorite, never changed
@@ -1516,6 +1590,117 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
             }
         }
     }
+}
+
+/// The columns of the list, shared by a group's line and its sessions.
+struct GroupCols {
+    main_w: f32,
+    time_w: f32,
+    dur_w: f32,
+    has_conv: bool,
+    play_btn: bool,
+}
+
+/// One task's line on a day: its sessions' total, from the first start to the last end, the
+/// conversions of the total and Continue; the chevron (or a click on the line) shows its
+/// sessions under it. Returns (toggle, continue, a conversion value to copy).
+fn group_row(app: &mut App, ui: &mut egui::Ui, g: &super::by_task::TaskGroup, open: bool, profiles: &[TimesheetProfile], cols: GroupCols, h24: bool) -> (bool, bool, Option<String>) {
+    let c = p(ui);
+    let e = g.latest().clone();
+    let mut toggle = false;
+    let mut resume = false;
+    let mut copied = None;
+    let mut buttons_left = 0.0_f32;
+    let n = g.pieces.len() as i64;
+    let row = ui.horizontal(|ui| {
+        ui.set_min_height(64.0);
+        ui.add_space(14.0);
+        col(ui, cols.main_w, 60.0, |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if let Some(col_) = app.store.db.project(&e.project_id).map(|p| hex(&p.color)) {
+                    dot(ui, col_, 3.5);
+                }
+                ui.add(egui::Label::new(RichText::new(super::session_title(&app.store.db, &e)).font(medium(14.0))).truncate());
+            });
+            // project and client only: a note belongs to one session, not to the group
+            let context = app.store.db.project(&e.project_id).map(|p| {
+                let client = app.store.db.client_name(p);
+                if client.is_empty() { p.name.clone() } else { format!("{} · {}", p.name, client) }
+            }).unwrap_or_default();
+            let line = if context.is_empty() { plural(n, "{} session", "{} sessions") } else { format!("{} · {}", plural(n, "{} session", "{} sessions"), context) };
+            ui.allocate_ui_with_layout(egui::vec2(cols.main_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_width(cols.main_w);
+                ui.add(egui::Label::new(mixed_job(&line, 12.0, c.text2, sans(12.0), mono_font(12.0))).truncate());
+            });
+        });
+        let (from, to) = (clock_text(g.first, h24), clock_text(g.last, h24));
+        if cols.time_w > 0.0 {
+            col(ui, cols.time_w, 60.0, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.add_space(12.0);
+                ui.label(range_job(&from, &to, 13.0, c.text2));
+                // first start to last end is not one stretch of work
+                mixed(ui, &plural(n, "{} interval", "{} intervals"), 12.0, Some(c.text2));
+            });
+        }
+        col(ui, cols.dur_w, 60.0, |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.add_space(if cols.time_w == 0.0 { 12.0 } else { 21.0 });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(mono_m(super::shown_duration(&app.store.db, g.total), 14.0));
+                if g.running {
+                    dot(ui, c.green, 3.0);
+                }
+            });
+            if cols.time_w == 0.0 {
+                ui.label(range_job(&from, &to, 12.0, c.text2));
+            }
+        });
+        ui.add_space(4.0);
+        let (conv, play, more) = ui.vertical(|ui| {
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let conv = cols.has_conv.then(|| icon_ghost_quiet(ui, Glyph::Convert, "Conversions"));
+                let play = cols.play_btn.then(|| icon_ghost(ui, Glyph::Play, "Continue now"));
+                let more = icon_button(ui, if open { Glyph::Down } else { Glyph::Next }, if open { "Hide the sessions" } else { "Show the sessions" });
+                (conv, play, more)
+            }).inner
+        }).inner;
+        buttons_left = conv.as_ref().or(play.as_ref()).map(|r| r.rect.left()).unwrap_or(more.rect.left());
+        if let Some(conv) = conv {
+            let cid = ui.make_persistent_id(("group-conv", &g.key, g.first));
+            if conv.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(cid));
+            }
+            let shown = ui.memory(|m| m.is_popup_open(cid));
+            egui::popup_below_widget(ui, cid, &conv, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                if let Some(v) = conversions_card(ui, profiles, g.total, true) {
+                    copied = Some(v);
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            });
+            if !shown {
+                conv.on_hover_ui(|ui| {
+                    conversions_card(ui, profiles, g.total, false);
+                });
+            }
+        }
+        resume = play.is_some_and(|r| r.clicked());
+        toggle = more.clicked();
+    });
+    let click_rect = egui::Rect::from_min_max(row.response.rect.min, egui::pos2(buttons_left - 4.0, row.response.rect.bottom()));
+    let resp = ui.interact(click_rect, egui::Id::new(("group-row", &g.key, g.first)), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, super::session_title(&app.store.db, &e)));
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    toggle |= resp.clicked();
+    divider(ui);
+    (toggle, resume, copied)
 }
 
 /// The message shown when something tries to change a locked session.

@@ -90,6 +90,10 @@ pub struct LocalConfig {
     /// work item at a time, live, with the token in the keychain. Off until turned on.
     #[serde(default)]
     pub mcp_azure: bool,
+    /// Today's list and the compact window's sessions grouped by task (one line per task and
+    /// day), on this device.
+    #[serde(default)]
+    pub list_by_task: bool,
 }
 
 fn default_true() -> bool {
@@ -122,6 +126,7 @@ impl Default for LocalConfig {
             update_latest: None,
             mcp_enabled: false,
             mcp_azure: false,
+            list_by_task: false,
         }
     }
 }

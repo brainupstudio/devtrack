@@ -5,6 +5,7 @@
 mod activities;
 mod assigned;
 mod assistants;
+mod by_task;
 mod compact;
 mod dest;
 mod gallery;
@@ -843,6 +844,24 @@ impl App {
                 Page::Today
             }
             // the compact window's history scrolled part way, a day's band pinned (with --compact)
+            // the list grouped by task; "-open" shows the sessions of the groups with more than one
+            "by-task" | "by-task-open" => {
+                self.store.local.list_by_task = true;
+                if name == "by-task-open" {
+                    let now = now_secs();
+                    let day = today_date();
+                    let mut pieces = vec![];
+                    for e in self.store.db.live_entries() {
+                        for (d, a, b) in devtrack_core::report::day_pieces(e, now) {
+                            if d == day { pieces.push((e.clone(), a, b)); }
+                        }
+                    }
+                    for g in by_task::group(&pieces).into_iter().filter(|g| g.pieces.len() > 1) {
+                        self.today.open_groups.insert(by_task::group_id(day, &g));
+                    }
+                }
+                Page::Today
+            }
             "compact-scrolled" => {
                 compact::SHOT_SCROLLED.store(true, std::sync::atomic::Ordering::Relaxed);
                 Page::Today

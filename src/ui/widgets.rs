@@ -424,6 +424,12 @@ pub enum Glyph {
     Sidebar,
     Check,
     Lock,
+    /// Sessions gathered into one line: three short lines meeting in a long one.
+    Group,
+    /// A list: a dot and a line, three times.
+    List,
+    /// A grid of rows and columns (the weekly timesheet).
+    Grid,
 }
 
 pub fn draw_glyph(painter: &egui::Painter, c: egui::Pos2, g: Glyph, col: Color32) {
@@ -499,7 +505,45 @@ pub fn draw_glyph(painter: &egui::Painter, c: egui::Pos2, g: Glyph, col: Color32
             painter.line_segment([c + egui::vec2(3.5, -1.5), c + egui::vec2(3.5, 0.0)], s);
             painter.rect_stroke(egui::Rect::from_min_size(c + egui::vec2(-5.5, 0.0), egui::vec2(11.0, 7.5)), 1.5, s, egui::StrokeKind::Middle);
         }
+        Glyph::List => {
+            for dy in [-4.5, 0.0, 4.5] {
+                painter.circle_filled(c + egui::vec2(-5.5, dy), 1.1, col);
+                painter.line_segment([c + egui::vec2(-2.5, dy), c + egui::vec2(6.5, dy)], s);
+            }
+        }
+        Glyph::Grid => {
+            painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(14.0, 12.0)), 2.0, s, egui::StrokeKind::Middle);
+            painter.line_segment([c + egui::vec2(-7.0, -1.5), c + egui::vec2(7.0, -1.5)], s);
+            painter.line_segment([c + egui::vec2(-2.0, -6.0), c + egui::vec2(-2.0, 6.0)], s);
+            painter.line_segment([c + egui::vec2(2.5, -6.0), c + egui::vec2(2.5, 6.0)], s);
+        }
+        Glyph::Group => {
+            // three short lines on the left, gathered by a bracket into one line on the right
+            for dy in [-4.5, 0.0, 4.5] {
+                painter.line_segment([c + egui::vec2(-6.5, dy), c + egui::vec2(-2.5, dy)], s);
+            }
+            painter.add(egui::Shape::line(vec![c + egui::vec2(-0.5, -4.5), c + egui::vec2(1.0, -4.5), c + egui::vec2(1.0, 4.5), c + egui::vec2(-0.5, 4.5)], s));
+            painter.line_segment([c + egui::vec2(1.0, 0.0), c + egui::vec2(6.5, 0.0)], s);
+        }
     }
+}
+
+/// A 36×36 icon button that stays pressed while `on`: the selected fill and an amber glyph, as
+/// every selected state in the app (and the accessible "selected" state, not only colour).
+pub fn icon_toggle(ui: &mut Ui, glyph: Glyph, name: &str, on: bool) -> egui::Response {
+    let c = p(ui);
+    let name = tr(name);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(CTRL_H, CTRL_H), Sense::click());
+    let over = resp.hovered() || resp.is_pointer_button_down_on();
+    let fill = if on { c.selected } else { hover_mix(ui, resp.id, over, c.raised, c.hover) };
+    let edge = if on { c.border } else { hover_mix(ui, resp.id.with("edge"), over, c.border, c.text2) };
+    ui.painter().rect(rect, RADIUS, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    draw_glyph(ui.painter(), rect.center(), glyph, if on { c.amber } else { c.text });
+    if resp.has_focus() {
+        focus_ring(ui, rect);
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name.clone()));
+    resp.on_hover_text(name)
 }
 
 /// 36×36 icon button with a tooltip and an accessible name.
@@ -990,13 +1034,6 @@ pub fn menu_row_raw(ui: &mut Ui, text: &str, selected: bool, is_mono: bool) -> e
 }
 
 /// Segmented switch in the 36-unit family: a framed group of options; neutral selected fill.
-/// The width `segmented` takes for these options.
-pub fn segmented_w(ui: &Ui, options: &[&str]) -> f32 {
-    let font = sans(14.0);
-    let sum: f32 = options.iter().map(|o| text_w(ui, &tr(o), &font) + 24.0).sum();
-    (sum + 8.0 + 4.0 * options.len().saturating_sub(1) as f32).ceil()
-}
-
 pub fn segmented(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
     let c = p(ui);
     let owned: Vec<String> = options.iter().map(|o| tr(o)).collect();
@@ -1036,6 +1073,46 @@ pub fn segmented(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize
         x += widths[i] + gap;
     }
     out
+}
+
+/// `segmented` with an icon per segment instead of a word: 36 high, 36 wide segments, the name
+/// of each in its tooltip and accessible label. For a switch that must stay narrow.
+pub fn segmented_icons(ui: &mut Ui, options: &[(Glyph, &str)], selected: usize) -> Option<usize> {
+    let c = p(ui);
+    let seg = CTRL_H - 8.0 + 8.0;
+    let gap = 4.0;
+    let total = seg * options.len() as f32 + 8.0 + gap * options.len().saturating_sub(1) as f32;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total, CTRL_H), Sense::hover());
+    ui.painter().rect(rect, RADIUS, c.field, Stroke::new(1.0, c.border), egui::StrokeKind::Inside);
+    let mut x = rect.left() + 4.0;
+    let mut out = None;
+    for (i, (glyph, name)) in options.iter().enumerate() {
+        let r = Rect::from_min_size(egui::pos2(x, rect.top() + 4.0), egui::vec2(seg, CTRL_H - 8.0));
+        let resp = ui.interact(r, ui.id().with(("seg-icon", i, *name)), Sense::click());
+        let sel = i == selected;
+        if sel {
+            ui.painter().rect_filled(r, 4.0, c.selected);
+        } else {
+            ui.painter().rect_filled(r, 4.0, hover_mix(ui, resp.id, resp.hovered(), Color32::TRANSPARENT, c.hover));
+        }
+        draw_glyph(ui.painter(), r.center(), *glyph, if sel { c.amber } else { c.text2 });
+        if resp.has_focus() {
+            ui.painter().rect_stroke(r.expand(1.0), 5.0, Stroke::new(2.0, c.focus), egui::StrokeKind::Inside);
+        }
+        let label_txt = tr(name);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, sel, label_txt.clone()));
+        let resp = resp.on_hover_text(tr(name));
+        if resp.clicked() && !sel {
+            out = Some(i);
+        }
+        x += seg + gap;
+    }
+    out
+}
+
+/// The width `segmented_icons` takes for `n` icons.
+pub fn segmented_icons_w(n: usize) -> f32 {
+    (CTRL_H) * n as f32 + 8.0 + 4.0 * n.saturating_sub(1) as f32
 }
 
 /// Label above a control (gap 6), helper or error below (gap 6). `add` draws the control.

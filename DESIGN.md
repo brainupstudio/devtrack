@@ -896,3 +896,20 @@ Settings › **AI assistants**, its own tab between Connections and Sync (`assis
 - **Code blocks** (`code_box`): field fill, Mono 13 breaking anywhere, the copy button in the top-right corner, turning into a tick (`Glyph::Check`) for 1.6 s; no toast.
 - **Try asking**: three example questions to copy, the second naming the project with most time in the last 30 days; the group's line points to the ready-made reports in Claude Desktop's + menu.
 
+## Sessions by task — 24 November 2026
+
+Today's list and the compact window can show a day as one line per task (`by_task.rs`), for reading and copying the hours per task. The choice is saved on the device (`list_by_task`) and shared by both windows.
+
+- **Switch.** Today: "By task" is a view, between List and Calendar (see below). Compact window: an icon toggle (`Glyph::Group`, `icon_toggle`: selected fill and amber glyph when on, accessible "selected" state) left of "+ Add past time".
+- **Grouping.** Same task and project go together; a session with a note but no task goes with the same project and note; a session that needs details stays alone. Largest first; time order inside a group.
+- **A group's line.** Title, "N sessions · project · client" (never a session's note), first start → last end with "N intervals" under it (it is not one stretch of work), the total, the conversions of the total, Continue (the latest session) and a chevron. A click on the line or the chevron shows the sessions under it, as full rows with a 2 px line down their left edge, each opening its own editor. A group of one session is that session's row.
+- **Copy.** In this mode every day has its band, and the band ends in a copy button: the day's totals per task as tab-separated lines (task, project, client, h:mm, one column per platform, then a total line), ready for a spreadsheet.
+
+## Today's toolbar, reorganised — 24 November 2026
+
+Four groups of controls (period, views, grouping, state) were fighting over two rows and became three or four in a narrow window. Now two rows, each with one job:
+
+- **Which time, and how to see it** — the period bar: ‹ date › Today · Day · Week · Month, and on its right, in the free space, one switch of four views **as icons only** (`VIEWS`, `segmented_icons`): List · By task · Calendar · Timesheet, each with its name as tooltip and accessible label. Icons keep the switch at 4 × 36 px instead of a row of words. By task is a view of its own instead of a second switch; choosing Timesheet keeps the period a week.
+- **What happened** — the summary row: the total and "tracked · N sessions", then the state of the sessions **as words** when there is nothing to do ("✔ All sessions completed" in green, "● A session is still running" in grey), and as the status button only when there is ("! 2 sessions need details ›").
+- When the views don't fit on the period bar (`period::status_fits`), they move to the right of the summary row (`views_in_summary`); when that is too narrow too, to a row of their own under it.
+

@@ -2,6 +2,15 @@
 //! and numbers are never in here. Grouped by area.
 
 pub static IT: &[(&str, &str)] = &[
+    // ---- list grouped by task ----
+    ("By task", "Per attività"),
+    ("Copy the day's totals per task", "Copia i totali della giornata per attività"),
+    ("The day's totals per task are copied: paste them into a spreadsheet", "Totali della giornata per attività copiati: incollali in un foglio di calcolo"),
+    ("{} interval", "{} intervallo"),
+    ("{} intervals", "{} intervalli"),
+    ("Show the sessions", "Mostra le sessioni"),
+    ("Hide the sessions", "Nascondi le sessioni"),
+    ("Group by task", "Raggruppa per attività"),
     // ---- AI assistants ----
     ("AI assistants", "Assistenti AI"),
     ("What assistants can read", "Cosa possono leggere gli assistenti"),

@@ -36,10 +36,11 @@ changes when it started.
 
 **The period.** Go back and forth with the arrows, return with **Today**, and switch between
 **Day**, **Week** and **Month**. Click the date between the arrows to type one (23/11/2026, 23/11,
-2026-11-23) or pick it on a small calendar: the view jumps there and keeps Day, Week or Month. On the right, three views:
+2026-11-23) or pick it on a small calendar: the view jumps there and keeps Day, Week or Month. On the right, the views, as icons (hover one for its name):
 
 - **List**: every session with its time and duration; ⇄ shows the value for each platform,
   ▷ starts it again, **…** edits, duplicates or deletes it.
+- **By task**: one line per task with the day's total (see *Sessions by task* below).
 - **Timeline**: the sessions placed on the hours of the day; drag to create, move or stretch
   them (the step is set in **Settings › Time & days › Sessions**).
 - **Timesheet**: one row per project, one column per day. Type a day's hours in a cell (8, 1,5
@@ -58,6 +59,13 @@ over the page you are on.
 duration, note, tags and billable. In both, the task list also offers the Azure DevOps work items
 assigned to you that are not in DevTrack yet: choosing one imports it and picks it. Changing the duration moves the end; an end before the start
 is an error, never a jump to the next day.
+
+### Sessions by task
+
+When a task has several sessions in a day, the **By task** view (the second icon of the views on Today, or the grouping button beside "+ Add past time" in the compact window) shows one line
+per task with the day's total, from the first start to the last end. Open a line to see its
+sessions. The copy button at the end of each day copies the day's totals per task, with the value
+for each platform, ready to paste into a spreadsheet.
 
 ## Work
 
