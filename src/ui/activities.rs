@@ -694,7 +694,29 @@ fn browser(app: &mut App, ui: &mut egui::Ui) {
         let client = match &app.act.client_filter { ClientFilter::Client(id) => Some(id.clone()), _ => None };
         open_project_form(app, ui.ctx(), None, client);
     }
-    let list: Vec<Project> = app.store.db.live_projects().into_iter().filter(|p| project_matches(app, p)).cloned().collect();
+    let mut list: Vec<Project> = app.store.db.live_projects().into_iter().filter(|p| project_matches(app, p)).cloned().collect();
+    // the order chosen on the titles: name, client, open tasks, tracked time
+    {
+        let (col, asc) = work_sort(app, PROJECT_SORT.0, PROJECT_SORT.1);
+        let db = &app.store.db;
+        let open_tasks = |p: &Project| db.live_tasks().filter(|t| t.project_id.as_deref() == Some(p.id.as_str()) && !t.done).count();
+        let tracked = |p: &Project| db.live_entries().filter(|e| e.project_id.as_deref() == Some(p.id.as_str())).map(|e| e.duration(now)).sum::<i64>();
+        let name = |p: &Project| p.name.to_lowercase();
+        let mut keyed: Vec<(Project, String, usize, i64)> = list.into_iter().map(|p| { let cl = db.client_name(&p).to_lowercase(); let (n, t) = (open_tasks(&p), tracked(&p)); (p, cl, n, t) }).collect();
+        keyed.sort_by(|a, b| {
+            let o = match col {
+                1 => a.1.cmp(&b.1),
+                2 => a.2.cmp(&b.2),
+                3 => a.3.cmp(&b.3),
+                _ => name(&a.0).cmp(&name(&b.0)),
+            };
+            let o = if asc { o } else { o.reverse() };
+            // by client, those without one stay last either way
+            let none_last = if col == 1 { a.1.is_empty().cmp(&b.1.is_empty()) } else { std::cmp::Ordering::Equal };
+            none_last.then(o).then_with(|| name(&a.0).cmp(&name(&b.0)))
+        });
+        list = keyed.into_iter().map(|x| x.0).collect();
+    }
     ui.horizontal(|ui| {
         ui.set_min_height(28.0);
         // counted against the chosen status: archived projects are not "missing" from the
@@ -740,10 +762,12 @@ fn browser(app: &mut App, ui: &mut egui::Ui) {
     // here: the top and the two sides, joining the border the rows draw below.
     ui.painter().with_clip_rect(hr).rect_stroke(egui::Rect::from_min_max(hr.min, egui::pos2(hr.right(), hr.bottom() + 16.0)), 10.0, Stroke::new(1.0, c.line), egui::StrokeKind::Inside);
     let hy = hr.center().y;
-    ui.painter().text(egui::pos2(hr.left() + 14.0, hy), egui::Align2::LEFT_CENTER, tr("Project"), sans(12.0), c.text2);
-    if !compact_rows { ui.painter().text(egui::pos2(hr.left() + 14.0 + name_w + 8.0, hy), egui::Align2::LEFT_CENTER, tr("Client"), sans(12.0), c.text2); }
-    if !compact_rows { ui.painter().text(egui::pos2(hr.right() - CTRL_H - 16.0 - track_w, hy), egui::Align2::RIGHT_CENTER, tr("Tasks"), sans(12.0), c.text2); }
-    ui.painter().text(egui::pos2(hr.right() - CTRL_H - 16.0, hy), egui::Align2::RIGHT_CENTER, tr("Tracked"), sans(12.0), c.text2);
+    // each title orders the list: names A–Z, counts and time largest first
+    let (key, def) = PROJECT_SORT;
+    work_title(app, ui, key, def, 0, true, egui::pos2(hr.left() + 14.0, hy), false, "Project");
+    if !compact_rows { work_title(app, ui, key, def, 1, true, egui::pos2(hr.left() + 14.0 + name_w + 8.0, hy), false, "Client"); }
+    if !compact_rows { work_title(app, ui, key, def, 2, false, egui::pos2(hr.right() - CTRL_H - 16.0 - track_w, hy), true, "Tasks"); }
+    work_title(app, ui, key, def, 3, false, egui::pos2(hr.right() - CTRL_H - 16.0, hy), true, "Tracked");
     let mut open: Option<Id> = None;
     let mut action: Option<(u8, Project)> = None;
     let list = egui::ScrollArea::vertical().id_salt("act-browser").auto_shrink([false, false]).show(ui, |ui| {
@@ -752,6 +776,7 @@ fn browser(app: &mut App, ui: &mut egui::Ui) {
             let last = ri + 1 == list.len();
             let tracked: i64 = app.store.db.live_entries().filter(|e| e.project_id.as_deref() == Some(pr.id.as_str())).map(|e| e.duration(now)).sum();
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, if compact_rows { 68.0 } else { 52.0 }), Sense::click());
+            app.geometry.rows.push((format!("project row · {}", pr.id), rect));
             // the fill is the whole row, edge to edge; the last one follows the table's corners
             ui.painter().rect_filled(rect, if last { TABLE_BOTTOM } else { egui::CornerRadius::ZERO }, hover_mix(ui, resp.id, resp.hovered(), Color32::TRANSPARENT, c.hover));
             if resp.has_focus() {
@@ -1351,6 +1376,26 @@ pub fn task_rename_modal(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// The order of one of Work's lists: (column, smallest first), or the list's default.
+fn work_sort(app: &App, list: &str, default: (u8, bool)) -> (u8, bool) {
+    app.store.local.sorts.get(list).copied().unwrap_or(default)
+}
+
+/// A sortable column title of one of Work's lists: a click picks the column in its natural
+/// direction (`natural_ascending`: names A–Z; counts, time and dates largest or latest first),
+/// a second click turns it round. Kept on this device.
+#[allow(clippy::too_many_arguments)]
+fn work_title(app: &mut App, ui: &mut egui::Ui, list: &str, default: (u8, bool), col: u8, natural_ascending: bool, at: egui::Pos2, right: bool, label: &str) {
+    let (cur, asc) = work_sort(app, list, default);
+    let active = cur == col;
+    let tip = if active { tr("Click to turn the order round") } else { trf("Order by {}", &[&tr(label).to_lowercase()]) };
+    if sort_title(ui, ("work-sort", list, col), at, right, label, active, asc, natural_ascending).on_hover_text(tip).clicked() {
+        let next = if active { (col, !asc) } else { (col, natural_ascending) };
+        app.store.local.sorts.insert(list.to_string(), next);
+        app.store.save_local();
+    }
+}
+
 /// New client and Rename client: the same dialog as a project's.
 pub fn client_modal(app: &mut App, ctx: &egui::Context) {
     let (mut name, renaming) = match app.act.client_edit.clone() {
@@ -1473,15 +1518,34 @@ fn clients_tab_ui(app: &mut App, ui: &mut egui::Ui) {
         app.act.client_status = StatusFilter::Active;
     }
     if list.is_empty() { return; }
+    // the order chosen on the titles: name A–Z, or the most projects first
+    let list: Vec<Client> = {
+        let (col, asc) = work_sort(app, CLIENT_SORT.0, CLIENT_SORT.1);
+        let db = &app.store.db;
+        let mut v: Vec<(Client, usize)> = list.into_iter().map(|cl| { let n = db.projects_of_client(&cl.id).len(); (cl, n) }).collect();
+        v.sort_by(|a, b| {
+            let o = if col == 1 { a.1.cmp(&b.1) } else { a.0.name.to_lowercase().cmp(&b.0.name.to_lowercase()) };
+            let o = if asc { o } else { o.reverse() };
+            o.then_with(|| a.0.name.to_lowercase().cmp(&b.0.name.to_lowercase()))
+        });
+        v.into_iter().map(|x| x.0).collect()
+    };
     let w = ui.available_width();
     let mut open = None;
     let list = egui::ScrollArea::vertical().id_salt("clients").auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let table_top = ui.cursor().top();
+        // titles, as the Projects table has: each one orders the list
+        let (hr, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), Sense::hover());
+        ui.painter().rect_filled(hr, TABLE_TOP, c.nav);
+        let (key, def) = CLIENT_SORT;
+        work_title(app, ui, key, def, 0, true, egui::pos2(hr.left() + 14.0, hr.center().y), false, "Client");
+        work_title(app, ui, key, def, 1, false, egui::pos2(hr.right() - 14.0, hr.center().y), true, "Projects");
         for (ri, cl) in list.iter().enumerate() {
             let n = app.store.db.projects_of_client(&cl.id).len();
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 52.0), Sense::click());
-            let round = egui::CornerRadius { nw: if ri == 0 { 9 } else { 0 }, ne: if ri == 0 { 9 } else { 0 }, sw: if ri + 1 == list.len() { 9 } else { 0 }, se: if ri + 1 == list.len() { 9 } else { 0 } };
+            // under the titles: only the last row has rounded corners
+            let round = egui::CornerRadius { nw: 0, ne: 0, sw: if ri + 1 == list.len() { 9 } else { 0 }, se: if ri + 1 == list.len() { 9 } else { 0 } };
             ui.painter().rect_filled(rect, round, hover_mix(ui, resp.id, resp.hovered(), Color32::TRANSPARENT, c.hover));
             if resp.has_focus() {
                 ui.painter().rect_stroke(rect.shrink(1.0), RADIUS, Stroke::new(2.0, c.focus), egui::StrokeKind::Inside);
@@ -1581,13 +1645,29 @@ fn tags_tab_ui(app: &mut App, ui: &mut egui::Ui) {
     let mut save: Option<(Id, String)> = None;
     let mut cancel = false;
     let editing = app.act.tag_edit.clone();
+    // the order chosen on the titles: name A–Z, or the most used first
+    let mut list = list;
+    {
+        let (col, asc) = work_sort(app, TAG_SORT.0, TAG_SORT.1);
+        let n_of = |t: &Tag| usage.get(&t.name.to_lowercase()).copied().unwrap_or((0, 0));
+        list.sort_by(|a, b| {
+            let o = if col == 1 { n_of(a).cmp(&n_of(b)) } else { a.name.to_lowercase().cmp(&b.name.to_lowercase()) };
+            let o = if asc { o } else { o.reverse() };
+            o.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+    }
     let scroll = egui::ScrollArea::vertical().id_salt("tags").auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let table_top = ui.cursor().top();
+        // titles, as the other tables have; "Use" lines up with the counts, read from a row
+        let (hr, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), Sense::hover());
+        ui.painter().rect_filled(hr, TABLE_TOP, c.nav);
+        let mut usage_right: Option<f32> = None;
         for (ri, t) in list.iter().enumerate() {
             let (n, secs) = usage.get(&t.name.to_lowercase()).copied().unwrap_or((0, 0));
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 52.0), Sense::hover());
-            let round = egui::CornerRadius { nw: if ri == 0 { 9 } else { 0 }, ne: if ri == 0 { 9 } else { 0 }, sw: if ri + 1 == list.len() { 9 } else { 0 }, se: if ri + 1 == list.len() { 9 } else { 0 } };
+            // under the titles: only the last row has rounded corners
+            let round = egui::CornerRadius { nw: 0, ne: 0, sw: if ri + 1 == list.len() { 9 } else { 0 }, se: if ri + 1 == list.len() { 9 } else { 0 } };
             let hot = resp.hovered() || ui.rect_contains_pointer(rect);
             ui.painter().rect_filled(rect, round, hover_mix(ui, resp.id, hot, Color32::TRANSPARENT, c.hover));
             app.geometry.rows.push((format!("tag row · {}", t.id), rect));
@@ -1626,6 +1706,7 @@ fn tags_tab_ui(app: &mut App, ui: &mut egui::Ui) {
                             action = Some(TagEdit::Rename(t.id.clone(), t.name.clone()));
                         }
                         ui.add_space(GROUP_GAP);
+                        if usage_right.is_none() { usage_right = Some(ui.cursor().max.x); }
                         let used = if n == 0 { tr("No sessions") } else { format!("{} · {}", plural(n, "{} session", "{} sessions"), words(secs)) };
                         ui.label(egui::WidgetText::from(mixed_job(&used, 13.0, c.text2, sans(13.0), mono_font(13.0))));
                     });
@@ -1634,6 +1715,9 @@ fn tags_tab_ui(app: &mut App, ui: &mut egui::Ui) {
             let _ = y;
             divider(ui);
         }
+        let (key, def) = TAG_SORT;
+        work_title(app, ui, key, def, 0, true, egui::pos2(hr.left() + 14.0, hr.center().y), false, "Tags");
+        work_title(app, ui, key, def, 1, false, egui::pos2(usage_right.unwrap_or(hr.right() - 14.0), hr.center().y), true, "Use");
         table_border(ui, table_top);
     });
     scroll_fades(ui, &scroll, p(ui).canvas);
@@ -1974,9 +2058,42 @@ const SESSIONS_SHOWN: usize = 10;
 /// The task rows of a list, the same on the Tasks tab (`all`: every project, so each row names
 /// its project and client) and in a project. A row opens in place: planned hours, source data
 /// and the most recent sessions. Only one row is open per list.
+/// The Tags tab: by name A–Z unless chosen otherwise (the most used first).
+const TAG_SORT: (&str, (u8, bool)) = ("tags", (0, true));
+
+/// The Clients tab: by name A–Z unless chosen otherwise (the most projects first).
+const CLIENT_SORT: (&str, (u8, bool)) = ("clients", (0, true));
+
+/// The Projects tab: by name A–Z unless chosen otherwise (client, open tasks, tracked time).
+/// Projects without a client come last when ordered by client.
+const PROJECT_SORT: (&str, (u8, bool)) = ("projects", (0, true));
+
+/// Work's task lists (the Tasks tab, a project's tasks): by name A–Z, by latest session, or by
+/// tracked time; the latest session first unless chosen otherwise on the titles.
+const TASK_SORT: (&str, (u8, bool)) = ("tasks", (1, false));
+
 fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
     let now = now_secs();
     let c = p(ui);
+    // the order chosen on the titles, the same on the Tasks tab and in a project
+    let tasks: Vec<Task> = {
+        let (col, asc) = work_sort(app, TASK_SORT.0, TASK_SORT.1);
+        let db = &app.store.db;
+        let last = |t: &Task| db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).map(|e| e.start).max();
+        let mut v: Vec<(Task, Option<i64>, i64)> = tasks.iter().map(|t| (t.clone(), last(t), db.task_total(&t.id, now))).collect();
+        v.sort_by(|a, b| {
+            let o = match col {
+                0 => a.0.title.to_lowercase().cmp(&b.0.title.to_lowercase()),
+                2 => a.2.cmp(&b.2).then(a.1.cmp(&b.1)),
+                _ => a.1.cmp(&b.1).then(a.2.cmp(&b.2)),
+            };
+            let o = if asc { o } else { o.reverse() };
+            // ties (and never tracked) by name
+            o.then_with(|| a.0.title.to_lowercase().cmp(&b.0.title.to_lowercase()))
+        });
+        v.into_iter().map(|x| x.0).collect()
+    };
+    let tasks = &tasks[..];
     let open_id = if all { app.act.all_open.clone() } else { app.act.task_open.clone() };
     let mut start: Option<Task> = None;
     let mut save: Vec<Task> = vec![];
@@ -1997,12 +2114,15 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
         // the rows follow the header with no gap: one bordered table
         ui.add_space(-ui.spacing().item_spacing.y);
         // after the disclosure column, on the same edge as the task titles
-        ui.painter().text(egui::pos2(hr.left() + CTRL_H + ROW_GAP * 3.0, hr.center().y), egui::Align2::LEFT_CENTER, tr("Task"), sans(12.0), c.text2);
+        // each title orders the list: name A–Z, the latest session, the most time
+        let (key, def) = TASK_SORT;
+        work_title(app, ui, key, def, 0, true, egui::pos2(hr.left() + CTRL_H + ROW_GAP * 3.0, hr.center().y), false, "Task");
         if w >= 560.0 {
-            ui.painter().text(egui::pos2(hr.right() - BTN_MIN_W - CTRL_H - ROW_GAP * 3.0 - GROUP_GAP - conv_w, hr.center().y), egui::Align2::RIGHT_CENTER, tr("Tracked"), sans(12.0), c.text2);
+            work_title(app, ui, key, def, 2, false, egui::pos2(hr.right() - BTN_MIN_W - CTRL_H - ROW_GAP * 3.0 - GROUP_GAP - conv_w, hr.center().y), true, "Tracked");
         }
         if w >= 720.0 {
-            ui.painter().text(egui::pos2(hr.right() - BTN_MIN_W - CTRL_H - ROW_GAP * 4.0 - GROUP_GAP - if tasks.iter().any(|t| t.planned_secs().is_some()) { 170.0 } else { 110.0 } - conv_w, hr.center().y), egui::Align2::RIGHT_CENTER, tr("Last session"), sans(12.0), c.text2);
+            let x = hr.right() - BTN_MIN_W - CTRL_H - ROW_GAP * 4.0 - GROUP_GAP - if tasks.iter().any(|t| t.planned_secs().is_some()) { 170.0 } else { 110.0 } - conv_w;
+            work_title(app, ui, key, def, 1, false, egui::pos2(x, hr.center().y), true, "Last session");
         }
     }
     let w = ui.available_width();
@@ -3022,6 +3142,44 @@ fn import(app: &mut App, cfg: &IntegrationConfig, ids: &[String], target: Option
 mod navigation_tests {
     use super::*;
     use devtrack_core::{sample::{build_state, DemoState}, store::Store};
+
+    /// Work's lists order by their titles: Projects by name first, then a click on Tracked
+    /// puts the most tracked first, and a second click turns it round; the choice is kept.
+    #[test]
+    fn work_lists_order_by_their_column_titles() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
+        app.act.tab = ActTab::Projects;
+        let now = now_secs();
+        let tracked = |app: &App, id: &str| app.store.db.live_entries().filter(|e| e.project_id.as_deref() == Some(id)).map(|e| e.duration(now)).sum::<i64>();
+        let order = |app: &App| -> Vec<Id> {
+            let mut rows: Vec<(f32, Id)> = app.geometry.rows.iter().filter_map(|(n, r)| n.strip_prefix("project row · ").map(|id| (r.top(), id.to_string()))).collect();
+            rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+            rows.into_iter().map(|x| x.1).collect()
+        };
+        draw(&ctx, &mut app, vec![]);
+        draw(&ctx, &mut app, vec![]);
+        assert!(order(&app).len() > 3, "the rows are drawn");
+        let names: Vec<String> = order(&app).iter().map(|id| app.store.db.projects[id].name.to_lowercase()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "by name, A to Z: {names:?}");
+        let title = egui::Id::new(("work-sort", "projects", 3u8));
+        for _ in 0..2 {
+            let r = ctx.read_response(title).expect("the Tracked title").rect;
+            let button = |pressed| egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            draw(&ctx, &mut app, vec![egui::Event::PointerMoved(r.center())]);
+            draw(&ctx, &mut app, vec![button(true)]);
+            draw(&ctx, &mut app, vec![button(false)]);
+            draw(&ctx, &mut app, vec![]);
+            let t: Vec<i64> = order(&app).iter().map(|id| tracked(&app, id)).collect();
+            if app.store.local.sorts["projects"] == (3, false) {
+                assert!(t.windows(2).all(|w| w[0] >= w[1]), "the most tracked first: {t:?}");
+            } else {
+                assert_eq!(app.store.local.sorts["projects"], (3, true), "a second click turns it round");
+                assert!(t.windows(2).all(|w| w[0] <= w[1]), "the least tracked first: {t:?}");
+            }
+        }
+    }
 
     fn draw(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
         app.geometry.rows.clear();

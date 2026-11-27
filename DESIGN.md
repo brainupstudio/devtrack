@@ -1023,3 +1023,12 @@ Today's list ran a day's sessions oldest first and the compact window newest fir
 - **The order covers the day only:** days still run newest first; groups of By task follow the same column (their latest session, their total, their task's name), and so do the sessions under an open group.
 - **One function, both windows** (`today::sort_day`, `sort_groups`), and one setting kept on this device (`LocalConfig.list_sort`). The compact window has no titles; it follows the choice made on Today.
 
+### Work's lists order by their column titles too — 27 November 2026
+
+The same sortable title as Today's (`widgets::sort_title`) heads Work's lists; each list keeps its own order on this device (`LocalConfig.sorts`, by list).
+
+- **Tasks** (the tab and a project's tasks, one order for both): Task A–Z, Last session (default, latest first), Tracked (most first).
+- **Projects:** Project (default, A–Z), Client (A–Z; projects without one stay last either way), Tasks (open tasks, most first), Tracked (most first).
+- **Clients** and **Tags** gain a title row, as the Projects table has: Client (default, A–Z) and Projects (most first); Tag (default, A–Z) and Use (most sessions first), "Use" lined up with the counts.
+- A click picks a column in its natural direction (names A–Z, counts, time and dates largest or latest first); a second click turns it round. In a number column the arrow goes before the title, so the column keeps its right edge.
+

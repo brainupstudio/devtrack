@@ -1666,6 +1666,49 @@ pub fn tag_matches(name: &str, q: &str) -> bool {
     search_matches(q.trim().trim_start_matches('#'), &[name]) || (!k.is_empty() && devtrack_core::model::tag_key(name).contains(&k))
 }
 
+/// A column title that orders its list: the active one in medium weight and the main text
+/// colour with an arrow that has a stem (down: largest, latest or Z first), drawn at 1.5 px like
+/// the app's glyphs, not a caret (a caret means a menu here). Over an inactive title the arrow
+/// shows faint, the way a click would order it (`natural_ascending`). `right`: the title ends at
+/// `at` (a number column), and the arrow goes before it so the column's edge stays put.
+#[allow(clippy::too_many_arguments)]
+pub fn sort_title(ui: &mut Ui, salt: impl std::hash::Hash, at: egui::Pos2, right: bool, label: &str, active: bool, ascending: bool, natural_ascending: bool) -> egui::Response {
+    let c = p(ui);
+    let font = if active { medium(12.0) } else { sans(12.0) };
+    let g = ui.painter().layout_no_wrap(tr(label), font, c.text2);
+    let x0 = if right { at.x - g.size().x } else { at.x };
+    let text_r = Rect::from_min_size(egui::pos2(x0, at.y - g.size().y / 2.0), g.size());
+    let hit = if right {
+        text_r.expand2(egui::vec2(6.0, 9.0)).with_min_x(text_r.left() - 20.0)
+    } else {
+        text_r.expand2(egui::vec2(6.0, 9.0)).with_max_x(text_r.right() + 20.0)
+    };
+    let resp = ui.interact(hit, egui::Id::new(salt), Sense::click());
+    let hot = resp.hovered() || resp.has_focus();
+    // the colour is known only once the pointer is read: it overrides the one laid out
+    ui.painter().galley_with_override_text_color(text_r.min, g, if active || hot { c.text } else { c.text2 });
+    let shown = if active { Some((!ascending, c.text)) } else if hot { Some((!natural_ascending, c.text2.gamma_multiply(0.7))) } else { None };
+    if let Some((down, col)) = shown {
+        let x = if right { text_r.left() - 8.0 } else { text_r.right() + 8.0 };
+        let y = text_r.center().y + 0.5;
+        let (tip, tail) = if down { (y + 4.5, y - 4.5) } else { (y - 4.5, y + 4.5) };
+        let head = if down { -3.0 } else { 3.0 };
+        let st = Stroke::new(1.5, col);
+        ui.painter().line_segment([egui::pos2(x, tail), egui::pos2(x, tip)], st);
+        ui.painter().line_segment([egui::pos2(x - 3.0, tip + head), egui::pos2(x, tip)], st);
+        ui.painter().line_segment([egui::pos2(x + 3.0, tip + head), egui::pos2(x, tip)], st);
+    }
+    if resp.has_focus() {
+        focus_ring(ui, hit.shrink2(egui::vec2(0.0, 3.0)));
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let name = tr(label);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone()));
+    resp
+}
+
 /// A one-line text cut with "…" to the room there is. With `tip`, that tip alone on the pointer:
 /// egui's own Label adds the uncut text as a second tip when it cuts, which would stack under it.
 pub fn cut_line(ui: &mut Ui, mut job: egui::text::LayoutJob, tip: Option<String>) -> egui::Response {

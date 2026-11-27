@@ -2062,40 +2062,8 @@ struct GroupCols {
 /// column when clicked.
 fn sort_header(ui: &mut egui::Ui, at: egui::Pos2, label: &str, by: devtrack_core::store::SortBy, order: devtrack_core::store::ListSort) -> Option<devtrack_core::store::SortBy> {
     use devtrack_core::store::SortBy;
-    let c = p(ui);
     let active = order.by == by;
-    // the active column reads as chosen: medium weight, the main text colour
-    let font = if active { medium(12.0) } else { sans(12.0) };
-    let g = ui.painter().layout_no_wrap(tr(label), font, c.text2);
-    let text_r = egui::Rect::from_min_size(egui::pos2(at.x, at.y - g.size().y / 2.0), g.size());
-    let hit = text_r.expand2(egui::vec2(6.0, 9.0)).with_max_x(text_r.right() + 20.0);
-    let resp = ui.interact(hit, egui::Id::new(("sort-header", label)), Sense::click());
-    let hot = resp.hovered() || resp.has_focus();
-    let col = if active || hot { c.text } else { c.text2 };
-    // the colour is known only once the pointer is read: it overrides the one laid out
-    ui.painter().galley_with_override_text_color(text_r.min, g, col);
-    // an arrow with a stem, drawn as the app's glyphs are (1.5 px): it points the way the
-    // column runs, and does not read as the caret of a menu. Over an inactive title it shows,
-    // faint, the way a click would order it.
-    let natural_down = by != SortBy::Task;
-    let shown = if active { Some((!order.ascending, c.text)) } else if hot { Some((natural_down, c.text2.gamma_multiply(0.7))) } else { None };
-    if let Some((down, col)) = shown {
-        let x = text_r.right() + 8.0;
-        // centred on the capitals, not the line box
-        let y = text_r.center().y + 0.5;
-        let (tip, tail) = if down { (y + 4.5, y - 4.5) } else { (y - 4.5, y + 4.5) };
-        let head = if down { -3.0 } else { 3.0 };
-        let st = Stroke::new(1.5, col);
-        ui.painter().line_segment([egui::pos2(x, tail), egui::pos2(x, tip)], st);
-        ui.painter().line_segment([egui::pos2(x - 3.0, tip + head), egui::pos2(x, tip)], st);
-        ui.painter().line_segment([egui::pos2(x + 3.0, tip + head), egui::pos2(x, tip)], st);
-    }
-    if resp.has_focus() {
-        focus_ring(ui, hit.shrink2(egui::vec2(0.0, 3.0)));
-    }
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
+    let resp = sort_title(ui, ("sort-header", label), at, false, label, active, order.ascending, by == SortBy::Task);
     let what = match (by, active, order.ascending) {
         (SortBy::Time, true, false) => "Most recent first · click for the earliest first",
         (SortBy::Time, true, true) => "Earliest first · click for the most recent first",

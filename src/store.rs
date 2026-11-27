@@ -100,6 +100,10 @@ pub struct LocalConfig {
     /// How the sessions of a day are ordered, in Today's list and the compact window alike.
     #[serde(default)]
     pub list_sort: ListSort,
+    /// The order of Work's lists (tasks, projects, clients, tags): per list, a column number
+    /// and whether it runs smallest first. A list not here uses its own default.
+    #[serde(default)]
+    pub sorts: std::collections::BTreeMap<String, (u8, bool)>,
 }
 
 /// The column a day's sessions are ordered by.
@@ -159,6 +163,7 @@ impl Default for LocalConfig {
             list_by_task: false,
             compact_calendar: false,
             list_sort: ListSort::default(),
+            sorts: Default::default(),
         }
     }
 }

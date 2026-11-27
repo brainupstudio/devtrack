@@ -97,6 +97,10 @@ sessions.
 ## Work
 
 Four tabs: **Tasks**, **Projects**, **Clients** and **Tags**. Work opens on Tasks.
+Every list orders by its column titles, as Today's does: a click on a title (a task's or
+project's name, the client, the latest session, the tracked time, the number of projects or
+how much a tag is used) orders by it, a second click turns it round, and the arrow shows the
+column and the direction. Each list keeps its own order on this device.
 
 - **Tasks**: every task with its project, client, source and tracked time. Click a row to open it
   in place: its planned hours, its source data and its most recent sessions (**Show all** lists
