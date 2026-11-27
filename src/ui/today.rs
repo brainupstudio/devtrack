@@ -3403,7 +3403,7 @@ mod session_panel_tests {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
-        let e = app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some()).max_by_key(|e| e.start).cloned().expect("a daily meeting");
+        let e = app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some() && local_date(e.start) < today()).max_by_key(|e| e.start).cloned().expect("a daily meeting");
         let period = Period::containing(PeriodKind::Day, local_date(e.start), app.store.db.settings.week_starts_monday);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1600.0));
         let mut frame = |app: &mut App, events: Vec<egui::Event>| {
@@ -3442,7 +3442,7 @@ mod session_panel_tests {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
-        let day = local_date(app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some()).map(|e| e.start).max().unwrap());
+        let day = local_date(app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some() && local_date(e.start) < today()).map(|e| e.start).max().unwrap());
         let period = Period::containing(PeriodKind::Day, day, app.store.db.settings.week_starts_monday);
         let shown: Vec<TimeEntry> = {
             let mut v: Vec<TimeEntry> = entries_in(&app.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();
@@ -3487,7 +3487,7 @@ mod session_panel_tests {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
-        let e = app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some()).max_by_key(|e| e.start).cloned().unwrap();
+        let e = app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some() && local_date(e.start) < today()).max_by_key(|e| e.start).cloned().unwrap();
         let day = local_date(e.start);
         let period = Period::containing(PeriodKind::Day, day, app.store.db.settings.week_starts_monday);
         let shown: Vec<TimeEntry> = entries_in(&app.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();

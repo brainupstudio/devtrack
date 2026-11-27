@@ -100,7 +100,8 @@ Four tabs: **Tasks**, **Projects**, **Clients** and **Tags**. Work opens on Task
   (open, done, all), client, project (including "No project"), source (added in DevTrack, or
   read from Azure DevOps), estimates (over the planned hours, or without any) and tag (tasks
   with a session carrying it, or **No tags** for tasks with no tagged session).
-  **+ Add task** asks for the project.
+  **+ Add task** asks for the project. **Rename…** in a task's **···** menu changes the name of a
+  task added in DevTrack; an Azure DevOps work item keeps the title it has there.
 - **Projects**: name, client, colour, whether new sessions are billable, and planned hours (the
   sum of their tasks' estimates). A project lists its tasks, which open in place the same way.
 - **Clients**: active and archived ones, with their projects.

@@ -799,6 +799,14 @@ impl App {
                 };
                 Page::Activities
             }
+            // Rename task, on a task added in DevTrack
+            "task-rename" => {
+                self.act.tab = activities::ActTab::Tasks;
+                if let Some(t) = self.store.db.live_tasks().find(|t| t.source == SOURCE_MANUAL).cloned() {
+                    self.act.task_rename = Some((t.id.clone(), t.title.clone()));
+                }
+                Page::Activities
+            }
             "tasks" => {
                 self.act.tab = activities::ActTab::Tasks;
                 Page::Activities
@@ -2297,6 +2305,7 @@ impl eframe::App for App {
         activities::add_task_modal(self, ctx);
         activities::project_modal(self, ctx);
         activities::client_modal(self, ctx);
+        activities::task_rename_modal(self, ctx);
         self.leave_modal(ctx);
         self.idle_modal(ctx);
         self.toast_area(ctx);

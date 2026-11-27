@@ -239,6 +239,11 @@ pub struct ActState {
     /// Narrows the open client's projects by name.
     pub client_projects_query: String,
     pub client_edit: Option<ClientEdit>,
+    /// Rename task: the task and the name as typed (tasks added in DevTrack only).
+    pub task_rename: Option<(Id, String)>,
+    pub task_rename_attempted: bool,
+    pub task_rename_focused: bool,
+    pub task_rename_confirm: bool,
     pub client_attempted: bool,
     pub client_confirm: bool,
     pub client_focused: bool,
@@ -1291,6 +1296,61 @@ fn client_name_field(app: &App, ui: &mut egui::Ui, w: f32, name: &mut String, at
     r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
+/// Rename task: the name of a task added in DevTrack, in the same dialog as a client's. Its
+/// sessions follow on their own (they point to the task); a name another task of the same
+/// project already has is allowed but said.
+pub fn task_rename_modal(app: &mut App, ctx: &egui::Context) {
+    let Some((id, mut name)) = app.act.task_rename.clone() else { return };
+    let Some(task) = app.store.db.tasks.get(&id).cloned() else {
+        app.act.task_rename = None;
+        return;
+    };
+    let dialog = FormDialog {
+        id: "task-rename",
+        title: "Rename task",
+        context: None,
+        width: FORM_W,
+        primary: "Save",
+        primary_enabled: true,
+        dirty: name.trim() != task.title.trim(),
+        note: None,
+        note_link: None,
+    };
+    let dark = app.dark();
+    let (mut confirm, mut focused, attempted) = (app.act.task_rename_confirm, app.act.task_rename_focused, app.act.task_rename_attempted);
+    let db = &app.store.db;
+    let r = form_dialog(ctx, dark, dialog, &mut confirm, |ui, w| {
+        let dup = !name.trim().is_empty() && db.live_tasks().any(|t| t.id != id && t.project_id == task.project_id && t.title.trim().eq_ignore_ascii_case(name.trim()));
+        let err = if attempted && name.trim().is_empty() { Some(tr("Give the task a name")) } else { None };
+        let help = if dup { Some(tr("Another task of this project has this name.")) } else { None };
+        let r = field(ui, "Task name", help.as_deref(), err.as_deref(), |ui| input(ui, &mut name, Field::new("Task name", w).invalid(err.is_some())));
+        if !focused {
+            r.request_focus();
+            focused = true;
+        }
+        r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    });
+    app.act.task_rename_confirm = confirm;
+    app.act.task_rename_focused = focused;
+    let mut close = r.close;
+    if r.submit {
+        app.act.task_rename_attempted = true;
+        if !name.trim().is_empty() {
+            if name.trim() != task.title.trim() {
+                app.store.put_task(Task { title: name.trim().to_string(), ..task.clone() });
+                app.notify(tr("Task renamed"));
+            }
+            close = true;
+        }
+    }
+    if close {
+        app.act.task_rename = None;
+        app.restore_focus(ctx);
+    } else {
+        app.act.task_rename = Some((id, name));
+    }
+}
+
 /// New client and Rename client: the same dialog as a project's.
 pub fn client_modal(app: &mut App, ctx: &egui::Context) {
     let (mut name, renaming) = match app.act.client_edit.clone() {
@@ -1922,6 +1982,7 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
     let mut save: Vec<Task> = vec![];
     let mut delete: Option<Id> = None;
     let mut move_task: Option<Task> = None;
+    let mut rename_task: Option<Task> = None;
     let mut copied: Option<String> = None;
     let profiles: Vec<devtrack_core::model::TimesheetProfile> = app.store.db.live_profiles().into_iter().cloned().collect();
     // the conversions icon sits between the total and Start, as on Today
@@ -2079,6 +2140,11 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
                     if menu_row(ui, "Open original in Azure DevOps", false, false).clicked() {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(u));
                     }
+                }
+                // a task added in DevTrack is named here; an imported one takes its title from the
+                // source, which would overwrite a new name at the next refresh
+                if t.source == SOURCE_MANUAL && menu_row(ui, "Rename…", false, false).clicked() {
+                    rename_task = Some(t.clone());
                 }
                 if menu_row(ui, "Move task…", false, false).clicked() {
                     move_task = Some(t.clone());
@@ -2256,6 +2322,13 @@ fn task_rows(app: &mut App, ui: &mut egui::Ui, tasks: &[Task], all: bool) {
     if let Some(id) = delete {
         app.store.delete_task(&id);
         app.notify(tr("Task removed from DevTrack"));
+    }
+    if let Some(t) = rename_task {
+        app.remember_focus(ui.ctx());
+        app.act.task_rename = Some((t.id.clone(), t.title.clone()));
+        app.act.task_rename_attempted = false;
+        app.act.task_rename_focused = false;
+        app.act.task_rename_confirm = false;
     }
     if let Some(t) = move_task {
         let n = app.store.db.live_entries().filter(|e| e.task_id.as_deref() == Some(t.id.as_str())).count();
@@ -3099,6 +3172,27 @@ mod navigation_tests {
         frame(&mut app, vec![]);
         frame(&mut app, esc());
         assert!(app.act.add_open && app.act.add_confirm);
+    }
+
+    /// Rename task: Enter saves the new name on the task; its sessions keep pointing to it.
+    #[test]
+    fn a_task_added_in_devtrack_can_be_renamed() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
+        let task = app.store.db.live_tasks().find(|t| t.source == SOURCE_MANUAL && app.store.db.live_entries().any(|e| e.task_id.as_deref() == Some(t.id.as_str()))).cloned().unwrap();
+        let sessions = app.store.db.live_entries().filter(|e| e.task_id.as_deref() == Some(task.id.as_str())).count();
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0))), events, ..Default::default() }, |ctx| task_rename_modal(app, ctx));
+        };
+        app.act.task_rename = Some((task.id.clone(), "Corso Rust avanzato".into()));
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        frame(&mut app, vec![]);
+        assert!(app.act.task_rename.is_none(), "Enter saves and closes");
+        assert_eq!(app.store.db.tasks[&task.id].title, "Corso Rust avanzato");
+        assert_eq!(app.store.db.live_entries().filter(|e| e.task_id.as_deref() == Some(task.id.as_str())).count(), sessions, "its sessions stay on it");
     }
 
     #[test]
