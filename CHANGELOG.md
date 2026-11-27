@@ -1,3 +1,37 @@
+## DevTrack 0.1.19
+
+### Novità
+- **Ordinare le liste:** in Oggi i titoli Attività, Orario e Durata ordinano le sessioni del giorno; un secondo clic inverte l'ordine, e una freccia mostra colonna e direzione. Lo stesso vale in Lavoro: Attività (per nome, ultima sessione o tempo registrato), Progetti (per nome, cliente, attività aperte o tempo), Clienti e Tag, che ora hanno anche una riga di titoli. Ogni lista ricorda il suo ordine.
+- **Rinominare un'attività:** dal menu ··· di un'attività creata in DevTrack, Rinomina… ne cambia il nome; le sue sessioni restano collegate. Le attività di Azure DevOps prendono il titolo da DevOps.
+
+### Correzioni
+- **Stesso ordine in Oggi e nella finestra compatta:** prima Oggi mostrava le sessioni del giorno dalla più vecchia e la compatta dalla più recente. Ora entrambe partono dalla più recente, e la compatta segue l'ordine scelto in Oggi.
+
+### Download
+| Sistema | File |
+|---|---|
+| macOS 11 o successivo (Apple silicon e Intel) | `DevTrack-0.1.19-macOS.dmg` |
+| Windows 10/11 (x64) | `DevTrack-0.1.19-Windows-x64.zip` |
+| Linux (x64) | `DevTrack-0.1.19-Linux-x64.tar.gz` |
+
+### Aggiornare
+Dalla 0.1.3, su macOS, DevTrack si aggiorna da solo. Dalle versioni precedenti installa questa al posto di quella che hai, con il comando qui sotto o dal file scaricato: le sessioni, i progetti e le impostazioni restano dove sono.
+
+### Installare dal Terminale, senza avvisi
+Un comando scarica l'ultima versione, controlla che sia quella pubblicata e la installa; serve anche per aggiornare. Il sistema non mostra l'avviso sulle app non firmate.
+- **macOS e Linux**, nel Terminale: `curl -fsSL https://brainupstudio.github.io/devtrack.site/install.sh | sh`
+- **Windows**, in PowerShell: `irm https://brainupstudio.github.io/devtrack.site/install.ps1 | iex`
+
+### Primo avvio dal file scaricato
+Questa versione non è ancora firmata dagli editori dei sistemi operativi, quindi scaricata dal browser mostra un avviso la prima volta.
+- **macOS:** apri il DMG e trascina DevTrack in Applicazioni (sostituisci quella che c'è). Al primo avvio macOS dice che non può verificarla: premi Fine, apri Impostazioni di Sistema › Privacy e sicurezza e, in fondo, premi "Apri comunque". Serve una volta sola.
+- **Windows:** estrai lo zip e avvia `DevTrack.exe`. Se compare "Windows ha protetto il PC", scegli "Ulteriori informazioni" › "Esegui comunque".
+- **Linux:** estrai l'archivio ed esegui `./install.sh` per aggiungere DevTrack al menu delle applicazioni, oppure avvia direttamente `./devtrack`.
+
+### Limiti noti
+- L'icona nella barra dei menu e l'apertura all'avvio ci sono solo su macOS.
+- Le versioni per Windows e Linux sono versioni di anteprima: non sono ancora state provate su un PC con quei sistemi. Se trovi un problema, segnalacelo.
+
 ## DevTrack 0.1.18
 
 ### Novità
