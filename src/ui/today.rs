@@ -1627,11 +1627,28 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
         app.today.selected.clear();
     }
     if app.today.selected.is_empty() {
-        ui.painter().text(egui::pos2(hr.left() + 14.0, hr.center().y), egui::Align2::LEFT_CENTER, tr(if narrow { "Activity" } else { "Activity / project" }), sans(12.0), c.text2);
+        // the column titles order the day's sessions: a click picks the column, a second one
+        // turns it round; the compact window follows the same order
+        use devtrack_core::store::SortBy;
+        let mut pick = None;
+        pick = pick.or(sort_header(ui, egui::pos2(hr.left() + 14.0, hr.center().y), if narrow { "Activity" } else { "Activity / project" }, SortBy::Task, app.store.local.list_sort));
         if time_w > 0.0 {
-            ui.painter().text(egui::pos2(hr.left() + x_time, hr.center().y), egui::Align2::LEFT_CENTER, tr("Time"), sans(12.0), c.text2);
+            pick = pick.or(sort_header(ui, egui::pos2(hr.left() + x_time, hr.center().y), "Time", SortBy::Time, app.store.local.list_sort));
         }
-        ui.painter().text(egui::pos2(hr.left() + x_time + time_span, hr.center().y), egui::Align2::LEFT_CENTER, tr("Duration"), sans(12.0), c.text2);
+        pick = pick.or(sort_header(ui, egui::pos2(hr.left() + x_time + time_span, hr.center().y), "Duration", SortBy::Duration, app.store.local.list_sort));
+        if super::SHOT_SORT_HOVER.load(std::sync::atomic::Ordering::Relaxed) {
+            app.today.shot_pointer.set(Some(egui::pos2(hr.left() + x_time + time_span + 20.0, hr.center().y)));
+        }
+        if let Some(by) = pick {
+            let cur = app.store.local.list_sort;
+            app.store.local.list_sort = if cur.by == by {
+                devtrack_core::store::ListSort { by, ascending: !cur.ascending }
+            } else {
+                // each column starts the way it is most read: the latest, the longest, A–Z
+                devtrack_core::store::ListSort { by, ascending: by == SortBy::Task }
+            };
+            app.store.save_local();
+        }
     } else {
         // the table's header becomes the bar for what was ticked: nothing moves
         selection_bar(app, ui, hr, &ids);
@@ -1907,8 +1924,11 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
             None => divider(ui),
         }
     };
+    let order = app.store.local.list_sort;
     for (date, mut list) in by_day.into_iter().rev() {
-        list.sort_by_key(|x| x.1);
+        // days newest first; inside a day, the order chosen on the header (the same as the
+        // compact window's)
+        sort_day(&app.store.db, &mut list, order);
         if multi_day {
             // the day is a band of the table: same inset as the rows, its total in the duration column
             let (dr, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), Sense::hover());
@@ -1926,7 +1946,10 @@ fn ledger(app: &mut App, ui: &mut egui::Ui, entries: &[TimeEntry], period: &Peri
             divider(ui);
         }
         if by_task {
-            for g in super::by_task::group(&list) {
+            let mut groups = super::by_task::group(&list);
+            sort_groups(&app.store.db, &mut groups, order);
+            for mut g in groups {
+                sort_day(&app.store.db, &mut g.pieces, order);
                 if g.pieces.len() == 1 {
                     let (e, a, b) = &g.pieces[0];
                     draw_session(app, ui, e, a, b, &mut action, &mut copied, None);
@@ -2034,6 +2057,88 @@ struct GroupCols {
 /// One task's line on a day: its sessions' total, from the first start to the last end, the
 /// conversions of the total and Continue; the chevron (or a click on the line) shows its
 /// sessions under it. Returns (toggle, continue, a conversion value to copy).
+/// A column title of Today's list that orders it: the active one in the main text colour with
+/// an arrow (down: largest or latest first; up: smallest, earliest or A first). Returns the
+/// column when clicked.
+fn sort_header(ui: &mut egui::Ui, at: egui::Pos2, label: &str, by: devtrack_core::store::SortBy, order: devtrack_core::store::ListSort) -> Option<devtrack_core::store::SortBy> {
+    use devtrack_core::store::SortBy;
+    let c = p(ui);
+    let active = order.by == by;
+    // the active column reads as chosen: medium weight, the main text colour
+    let font = if active { medium(12.0) } else { sans(12.0) };
+    let g = ui.painter().layout_no_wrap(tr(label), font, c.text2);
+    let text_r = egui::Rect::from_min_size(egui::pos2(at.x, at.y - g.size().y / 2.0), g.size());
+    let hit = text_r.expand2(egui::vec2(6.0, 9.0)).with_max_x(text_r.right() + 20.0);
+    let resp = ui.interact(hit, egui::Id::new(("sort-header", label)), Sense::click());
+    let hot = resp.hovered() || resp.has_focus();
+    let col = if active || hot { c.text } else { c.text2 };
+    // the colour is known only once the pointer is read: it overrides the one laid out
+    ui.painter().galley_with_override_text_color(text_r.min, g, col);
+    // an arrow with a stem, drawn as the app's glyphs are (1.5 px): it points the way the
+    // column runs, and does not read as the caret of a menu. Over an inactive title it shows,
+    // faint, the way a click would order it.
+    let natural_down = by != SortBy::Task;
+    let shown = if active { Some((!order.ascending, c.text)) } else if hot { Some((natural_down, c.text2.gamma_multiply(0.7))) } else { None };
+    if let Some((down, col)) = shown {
+        let x = text_r.right() + 8.0;
+        // centred on the capitals, not the line box
+        let y = text_r.center().y + 0.5;
+        let (tip, tail) = if down { (y + 4.5, y - 4.5) } else { (y - 4.5, y + 4.5) };
+        let head = if down { -3.0 } else { 3.0 };
+        let st = Stroke::new(1.5, col);
+        ui.painter().line_segment([egui::pos2(x, tail), egui::pos2(x, tip)], st);
+        ui.painter().line_segment([egui::pos2(x - 3.0, tip + head), egui::pos2(x, tip)], st);
+        ui.painter().line_segment([egui::pos2(x + 3.0, tip + head), egui::pos2(x, tip)], st);
+    }
+    if resp.has_focus() {
+        focus_ring(ui, hit.shrink2(egui::vec2(0.0, 3.0)));
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let what = match (by, active, order.ascending) {
+        (SortBy::Time, true, false) => "Most recent first · click for the earliest first",
+        (SortBy::Time, true, true) => "Earliest first · click for the most recent first",
+        (SortBy::Time, false, _) => "Order by time",
+        (SortBy::Duration, true, false) => "Longest first · click for the shortest first",
+        (SortBy::Duration, true, true) => "Shortest first · click for the longest first",
+        (SortBy::Duration, false, _) => "Order by duration",
+        (SortBy::Task, true, true) => "A to Z · click for Z to A",
+        (SortBy::Task, true, false) => "Z to A · click for A to Z",
+        (SortBy::Task, false, _) => "Order by task",
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr(label)));
+    resp.on_hover_text(tr(what)).clicked().then_some(by)
+}
+
+/// The order of a day's sessions: by start, length or task name, either way; ties by start.
+/// Today's list and the compact window use it alike, so the two never disagree.
+pub(super) fn sort_day(db: &Db, list: &mut [(TimeEntry, i64, i64)], order: devtrack_core::store::ListSort) {
+    use devtrack_core::store::SortBy;
+    let name = |e: &TimeEntry| super::session_title(db, e).to_lowercase();
+    list.sort_by(|x, y| {
+        let o = match order.by {
+            SortBy::Time => x.1.cmp(&y.1),
+            SortBy::Duration => (x.2 - x.1).cmp(&(y.2 - y.1)).then(x.1.cmp(&y.1)),
+            SortBy::Task => name(&x.0).cmp(&name(&y.0)).then(x.1.cmp(&y.1)),
+        };
+        if order.ascending { o } else { o.reverse() }
+    });
+}
+
+/// The order of a day's task groups: by their latest session, their total or their task's name.
+pub(super) fn sort_groups(db: &Db, groups: &mut [super::by_task::TaskGroup], order: devtrack_core::store::ListSort) {
+    use devtrack_core::store::SortBy;
+    groups.sort_by(|x, y| {
+        let o = match order.by {
+            SortBy::Time => x.last.cmp(&y.last),
+            SortBy::Duration => x.total.cmp(&y.total).then(x.last.cmp(&y.last)),
+            SortBy::Task => super::session_title(db, x.latest()).to_lowercase().cmp(&super::session_title(db, y.latest()).to_lowercase()).then(x.last.cmp(&y.last)),
+        };
+        if order.ascending { o } else { o.reverse() }
+    });
+}
+
 /// The tags on a group's sessions with how many carry each, most used first.
 pub(super) fn group_tag_counts(db: &Db, g: &super::by_task::TaskGroup) -> Vec<(String, usize)> {
     let mut es: Vec<TimeEntry> = vec![];
@@ -3516,6 +3621,46 @@ mod session_panel_tests {
         // the meeting has no #sviluppo: still a block in the filtered calendar
         frame(&mut app, vec![], true);
         assert!(ctx.read_response(egui::Id::new(("tl", &e.id, day))).is_some(), "a session out of the filter is still drawn");
+    }
+
+    /// A day's sessions come most recent first by default, in Today and the compact window
+    /// alike (one function orders both); Duration's title orders by length, a second click
+    /// turns it round, and Activity starts A–Z.
+    #[test]
+    fn the_column_titles_order_the_day_and_the_default_is_most_recent_first() {
+        use devtrack_core::store::{ListSort, SortBy};
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut app = App::new(Store::in_memory(build_state(now_secs(), DemoState::Varied, false)), None);
+        assert_eq!(app.store.local.list_sort, ListSort { by: SortBy::Time, ascending: false });
+        let day = local_date(app.store.db.live_entries().filter(|e| e.description == "Riunione giornaliera" && e.stop.is_some() && local_date(e.start) < today()).map(|e| e.start).max().unwrap());
+        let period = Period::containing(PeriodKind::Day, day, app.store.db.settings.week_starts_monday);
+        let shown: Vec<TimeEntry> = entries_in(&app.store.db, &period, now_secs()).into_iter().filter(|e| !e.is_running()).cloned().collect();
+        let mut pieces: Vec<(TimeEntry, i64, i64)> = shown.iter().flat_map(|e| day_pieces(e, now_secs()).into_iter().filter(|p| p.0 == day).map(move |p| (e.clone(), p.1, p.2))).collect();
+        sort_day(&app.store.db, &mut pieces, app.store.local.list_sort);
+        assert!(pieces.windows(2).all(|w| w[0].1 >= w[1].1), "most recent first");
+        // the header: Duration, then Duration again
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 1800.0))), events, ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| ledger(app, ui, &shown, &period));
+            });
+        };
+        let mut click_title = |app: &mut App, label: &str| {
+            frame(app, vec![]);
+            let r = ctx.read_response(egui::Id::new(("sort-header", label))).expect("the title is drawn").rect;
+            let button = |pressed| egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            frame(app, vec![egui::Event::PointerMoved(r.center())]);
+            frame(app, vec![button(true)]);
+            frame(app, vec![button(false)]);
+        };
+        click_title(&mut app, "Duration");
+        assert_eq!(app.store.local.list_sort, ListSort { by: SortBy::Duration, ascending: false }, "longest first");
+        sort_day(&app.store.db, &mut pieces, app.store.local.list_sort);
+        assert!(pieces.windows(2).all(|w| w[0].2 - w[0].1 >= w[1].2 - w[1].1));
+        click_title(&mut app, "Duration");
+        assert!(app.store.local.list_sort.ascending, "a second click turns it round");
+        click_title(&mut app, "Activity / project");
+        assert_eq!(app.store.local.list_sort, ListSort { by: SortBy::Task, ascending: true }, "A to Z first");
     }
 
     /// In the calendar, dragging a block's upper edge moves its start and keeps its end; its

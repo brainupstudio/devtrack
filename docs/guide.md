@@ -41,6 +41,11 @@ one by typing its name. Choosing a client first narrows the projects to its own.
 to create it. Typing `#` and a word at the end of the task field does the same (a `#number` stays
 a work item's number): choose a tag from the list, or Enter for the first one.
 
+**Order:** a day's sessions come most recent first. Click a column title of the list —
+**Activity**, **Time** or **Duration** — to order by it (latest, longest, A–Z first); click it
+again to turn it round. The arrow shows the column and the direction. The compact window
+follows the same order; days always run newest first.
+
 **Only one tag:** click a `#tag` in a session's grey line, or choose it in the tag menu at the
 right of the total, and the total, the project bar and the list show only its sessions. The
 calendar keeps the others, faint, so a busy hour never looks free. **No tags** shows the sessions without any; **×** shows everything again. The

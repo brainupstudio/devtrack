@@ -475,8 +475,10 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
             *anchor = Some(r);
         }
     };
+    let order = app.store.local.list_sort;
     for (date, mut list) in by_day.into_iter().rev() {
-        list.sort_by_key(|x| std::cmp::Reverse(x.1));
+        // the order chosen on Today's header: the two windows never disagree
+        super::today::sort_day(&app.store.db, &mut list, order);
         // a day is a band, as in Today's list; it opens the group, so no line under it
         ui.add_space(16.0);
         let (slot, _) = ui.allocate_exact_size(egui::vec2(w, 32.0), Sense::hover());
@@ -486,7 +488,8 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
         ui.add_space(2.0);
         let rows_in_day = list.len();
         if by_task {
-            let groups = super::by_task::group(&list);
+            let mut groups = super::by_task::group(&list);
+            super::today::sort_groups(&app.store.db, &mut groups, order);
             let n_groups = groups.len();
             for (gi, g) in groups.into_iter().enumerate() {
                 if g.pieces.len() == 1 {
@@ -504,7 +507,7 @@ fn history(app: &mut App, ui: &mut egui::Ui, h24: bool) {
                     }
                     if open {
                         let mut sorted = g.pieces.clone();
-                        sorted.sort_by_key(|x| std::cmp::Reverse(x.1));
+                        super::today::sort_day(&app.store.db, &mut sorted, order);
                         let n = sorted.len();
                         for (i, (e, a, b)) in sorted.iter().enumerate() {
                             // the divider steps in to the nested edge; the branch runs through it

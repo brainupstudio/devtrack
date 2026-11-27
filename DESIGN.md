@@ -1014,3 +1014,12 @@ Under an open group (By task, in Today and in the compact window) the sessions u
 - **Not done, on purpose:** Undo stays the last action only, while its message shows, as everywhere in the app; more would need a history of changes, a piece of work of its own.
 - Statistics' "No project" row is translated (it was not, before the tags work).
 
+### One order for a day's sessions, chosen on the column titles — 27 November 2026
+
+Today's list ran a day's sessions oldest first and the compact window newest first; the sessions under a By task group did the same. Now:
+
+- **The default is the most recent first**, in both windows: the last session, the one most likely to be corrected, is the first one seen.
+- **Today's column titles order the day:** Activity, Time and Duration are buttons. A click picks the column in its natural direction (Time latest first, Duration longest first, Activity A–Z); a second click turns it round. The active title is in medium weight and the main text colour, followed by an arrow with a stem (down: latest, longest or Z first; up: the other way), drawn at 1.5 px like the app's other glyphs. Not a solid triangle: in this app a caret means a menu that opens. Over an inactive title the arrow shows faint, the way a click would order it; the keyboard focus gets the usual ring; the tooltip says the order and what the next click does.
+- **The order covers the day only:** days still run newest first; groups of By task follow the same column (their latest session, their total, their task's name), and so do the sessions under an open group.
+- **One function, both windows** (`today::sort_day`, `sort_groups`), and one setting kept on this device (`LocalConfig.list_sort`). The compact window has no titles; it follows the choice made on Today.
+

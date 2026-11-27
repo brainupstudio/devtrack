@@ -97,6 +97,33 @@ pub struct LocalConfig {
     /// The compact window shows one day's calendar instead of the recent sessions.
     #[serde(default)]
     pub compact_calendar: bool,
+    /// How the sessions of a day are ordered, in Today's list and the compact window alike.
+    #[serde(default)]
+    pub list_sort: ListSort,
+}
+
+/// The column a day's sessions are ordered by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortBy {
+    /// When it started (a group: its last session).
+    #[default]
+    Time,
+    /// How long it lasted (a group: its total).
+    Duration,
+    /// The task's name, A–Z.
+    Task,
+}
+
+/// A day's order: a column and a direction. The default is the most recent first, in both
+/// windows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListSort {
+    #[serde(default)]
+    pub by: SortBy,
+    /// Smallest first (earliest, shortest, A first); false is the default, largest first.
+    #[serde(default)]
+    pub ascending: bool,
 }
 
 fn default_true() -> bool {
@@ -131,6 +158,7 @@ impl Default for LocalConfig {
             mcp_azure: false,
             list_by_task: false,
             compact_calendar: false,
+            list_sort: ListSort::default(),
         }
     }
 }

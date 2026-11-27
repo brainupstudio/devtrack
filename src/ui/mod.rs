@@ -910,6 +910,12 @@ impl App {
                 Page::Today
             }
             // the pointer over the project bar's second segment (review pictures only)
+            // the list's column titles with the pointer on Duration: its arrow shows, faint
+            "sort-hover" => {
+                SHOT_POINTER.store(true, std::sync::atomic::Ordering::Relaxed);
+                SHOT_SORT_HOVER.store(true, std::sync::atomic::Ordering::Relaxed);
+                Page::Today
+            }
             "project-bar" => {
                 SHOT_POINTER.store(true, std::sync::atomic::Ordering::Relaxed);
                 Page::Today
@@ -2176,6 +2182,9 @@ impl App {
         }
     }
 }
+
+/// Review pictures: a pointer resting over Today's Duration title (`--page sort-hover`).
+pub static SHOT_SORT_HOVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Review pictures: a pointer resting over the project bar on Today (`--page project-bar`).
 pub static SHOT_POINTER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
